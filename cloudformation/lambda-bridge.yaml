@@ -1,0 +1,801 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon Connect MCP Lambda Bridge - API Gateway and Lambda function for extended Connect APIs'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    Description: Environment name (dev, staging, prod)
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+  
+  LambdaRuntime:
+    Type: String
+    Default: python3.11
+    Description: Python runtime version for Lambda
+    AllowedValues:
+      - python3.9
+      - python3.10
+      - python3.11
+      - python3.12
+  
+  LambdaMemorySize:
+    Type: Number
+    Default: 512
+    Description: Lambda memory size in MB
+    MinValue: 128
+    MaxValue: 10240
+  
+  LambdaTimeout:
+    Type: Number
+    Default: 30
+    Description: Lambda timeout in seconds
+    MinValue: 1
+    MaxValue: 900
+  
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    Description: CloudWatch log retention in days
+    AllowedValues:
+      - 1
+      - 3
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 120
+      - 150
+      - 180
+      - 365
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Environment Configuration"
+        Parameters:
+          - Environment
+      - Label:
+          default: "Lambda Configuration"
+        Parameters:
+          - LambdaRuntime
+          - LambdaMemorySize
+          - LambdaTimeout
+          - LogRetentionDays
+
+Resources:
+  # =============================================================================
+  # IAM Role for Lambda
+  # =============================================================================
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'connect-api-bridge-lambda-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Tags:
+        - Key: Project
+          Value: connect-api-bridge
+        - Key: Environment
+          Value: !Ref Environment
+
+  LambdaPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub 'connect-api-bridge-lambda-policy-${Environment}'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ConnectPermissions
+            Effect: Allow
+            Action:
+              - connect:ListPhoneNumbers
+              - connect:DescribePhoneNumber
+              - connect:ClaimPhoneNumber
+              - connect:ReleasePhoneNumber
+              - connect:SearchAvailablePhoneNumbers
+              - connect:ListInstances
+              - connect:DescribeInstance
+              - connect:UpdateInstanceAttribute
+              - connect:ListQueues
+              - connect:DescribeQueue
+              - connect:CreateQueue
+              - connect:UpdateQueue
+              - connect:UpdateQueueName
+              - connect:DeleteQueue
+              - connect:ListHoursOfOperations
+              - connect:DescribeHoursOfOperation
+              - connect:CreateHoursOfOperation
+              - connect:UpdateHoursOfOperation
+              - connect:UpdateHoursOfOperationConfig
+              - connect:DeleteHoursOfOperation
+              - connect:ListHoursOfOperationOverrides
+              - connect:ListPrompts
+              - connect:DescribePrompt
+              - connect:CreatePrompt
+              - connect:DeletePrompt
+              - connect:TagResource
+              - connect:UntagResource
+            Resource: '*'
+          - Sid: XRayPermissions
+            Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+            Resource: '*'
+      Roles:
+        - !Ref LambdaExecutionRole
+
+  # =============================================================================
+  # CloudWatch Log Group
+  # =============================================================================
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/connect-api-bridge-${Environment}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # =============================================================================
+  # Lambda Function
+  # =============================================================================
+  ConnectApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'connect-api-bridge-${Environment}'
+      Description: 'Amazon Connect API Bridge for MCP Server'
+      Handler: connect_api_handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: !Ref LambdaRuntime
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          AWS_XRAY_TRACING_NAME: connect-api-bridge
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from botocore.exceptions import ClientError
+          
+          def lambda_handler(event, context):
+              """Main Lambda handler for Connect API Bridge"""
+              
+              # Parse request
+              http_method = event.get('httpMethod', event.get('requestContext', {}).get('http', {}).get('method', 'GET'))
+              path = event.get('path', event.get('rawPath', ''))
+              
+              # Get action from path
+              action = path.split('/')[-1] if '/' in path else 'health'
+              
+              # Parse body
+              body = {}
+              if event.get('body'):
+                  try:
+                      body = json.loads(event['body']) if isinstance(event['body'], str) else event['body']
+                  except json.JSONDecodeError:
+                      pass
+              
+              # Initialize Connect client
+              try:
+                  region = body.get('region', os.environ.get('AWS_REGION', 'us-east-1'))
+                  connect = boto3.client('connect', region_name=region)
+              except Exception as e:
+                  return response(500, {'error': f'Failed to initialize Connect client: {str(e)}'})
+              
+              # Route requests
+              try:
+                  if action == 'list' and 'phone-numbers' in path:
+                      return list_phone_numbers(connect, body)
+                  elif action == 'search' and 'phone-numbers' in path:
+                      return search_phone_numbers(connect, body)
+                  elif action == 'claim' and 'phone-numbers' in path:
+                      return claim_phone_number(connect, body)
+                  elif action == 'release' and 'phone-numbers' in path:
+                      return release_phone_number(connect, body)
+                  elif action == 'list' and 'queues' in path:
+                      return list_queues(connect, body)
+                  elif action == 'create' and 'queues' in path:
+                      return create_queue(connect, body)
+                  elif action == 'update' and 'queues' in path:
+                      return update_queue(connect, body)
+                  elif action == 'delete' and 'queues' in path:
+                      return delete_queue(connect, body)
+                  elif action == 'list' and 'hours-of-operations' in path:
+                      return list_hours_of_operations(connect, body)
+                  elif action == 'create' and 'hours-of-operations' in path:
+                      return create_hours_of_operation(connect, body)
+                  elif action == 'update' and 'hours-of-operations' in path:
+                      return update_hours_of_operation(connect, body)
+                  elif action == 'delete' and 'hours-of-operations' in path:
+                      return delete_hours_of_operation(connect, body)
+                  elif action == 'list' and 'prompts' in path:
+                      return list_prompts(connect, body)
+                  elif action == 'create' and 'prompts' in path:
+                      return create_prompt(connect, body)
+                  elif action == 'delete' and 'prompts' in path:
+                      return delete_prompt(connect, body)
+                  elif action == 'list' and 'instances' in path:
+                      return list_instances(connect, body)
+                  elif action == 'health':
+                      return response(200, {'status': 'healthy', 'version': '1.0.0'})
+                  else:
+                      return response(404, {'error': f'Unknown action: {action}'})
+              except ClientError as e:
+                  return response(400, {'error': str(e)})
+              except Exception as e:
+                  return response(500, {'error': str(e)})
+          
+          def response(status_code, body_dict):
+              return {
+                  'statusCode': status_code,
+                  'headers': {
+                      'Content-Type': 'application/json',
+                      'Access-Control-Allow-Origin': '*',
+                      'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key',
+                      'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+                  },
+                  'body': json.dumps(body_dict)
+              }
+          
+          # Phone Numbers API
+          def list_phone_numbers(connect, body):
+              params = {
+                  'InstanceId': body.get('instance_id', os.environ.get('CONNECT_INSTANCE_ID')),
+                  'MaxResults': body.get('max_results', 100)
+              }
+              if body.get('phone_number_types'):
+                  params['PhoneNumberTypes'] = body['phone_number_types']
+              if body.get('phone_number_country_codes'):
+                  params['PhoneNumberCountryCodes'] = body['phone_number_country_codes']
+              result = connect.list_phone_numbers(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def search_phone_numbers(connect, body):
+              params = {
+                  'TargetArn': body.get('target_arn'),
+                  'PhoneNumberCountryCode': body.get('phone_number_country_code', 'US'),
+                  'PhoneNumberType': body.get('phone_number_type', 'TOLL_FREE'),
+                  'MaxResults': body.get('max_results', 10)
+              }
+              if not params['TargetArn']:
+                  return response(400, {'error': 'target_arn is required'})
+              result = connect.search_available_phone_numbers(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def claim_phone_number(connect, body):
+              params = {
+                  'TargetArn': body.get('target_arn'),
+                  'PhoneNumber': body.get('phone_number'),
+                  'Tags': body.get('tags', {})
+              }
+              if not params['TargetArn']:
+                  return response(400, {'error': 'target_arn is required'})
+              if not params['PhoneNumber']:
+                  return response(400, {'error': 'phone_number is required'})
+              result = connect.claim_phone_number(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def release_phone_number(connect, body):
+              params = {'PhoneNumberId': body.get('phone_number_id')}
+              if not params['PhoneNumberId']:
+                  return response(400, {'error': 'phone_number_id is required'})
+              result = connect.release_phone_number(**params)
+              return response(200, result)
+          
+          # Queues API
+          def list_queues(connect, body):
+              params = {'InstanceId': body.get('instance_id'), 'MaxResults': body.get('max_results', 100)}
+              if not params['InstanceId']:
+                  return response(400, {'error': 'instance_id is required'})
+              result = connect.list_queues(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def create_queue(connect, body):
+              params = {
+                  'InstanceId': body.get('instance_id'),
+                  'Name': body.get('name'),
+                  'Description': body.get('description'),
+                  'HoursOfOperationId': body.get('hours_of_operation_id'),
+                  'Tags': body.get('tags', {})
+              }
+              if not params['InstanceId'] or not params['Name']:
+                  return response(400, {'error': 'instance_id and name are required'})
+              result = connect.create_queue(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def update_queue(connect, body):
+              params = {
+                  'InstanceId': body.get('instance_id'),
+                  'QueueId': body.get('queue_id'),
+                  'Name': body.get('name'),
+                  'Description': body.get('description')
+              }
+              if not params['InstanceId'] or not params['QueueId']:
+                  return response(400, {'error': 'instance_id and queue_id are required'})
+              result = connect.update_queue(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def delete_queue(connect, body):
+              params = {
+                  'InstanceId': body.get('instance_id'),
+                  'QueueId': body.get('queue_id')
+              }
+              if not params['InstanceId'] or not params['QueueId']:
+                  return response(400, {'error': 'instance_id and queue_id are required'})
+              result = connect.delete_queue(**params)
+              return response(200, result)
+          
+          # Hours of Operations API
+          def list_hours_of_operations(connect, body):
+              params = {'InstanceId': body.get('instance_id'), 'MaxResults': body.get('max_results', 100)}
+              if not params['InstanceId']:
+                  return response(400, {'error': 'instance_id is required'})
+              result = connect.list_hours_of_operations(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def create_hours_of_operation(connect, body):
+              params = {
+                  'InstanceId': body.get('instance_id'),
+                  'Name': body.get('name'),
+                  'Description': body.get('description'),
+                  'TimeZone': body.get('time_zone', 'America/New_York'),
+                  'Config': body.get('config', [])
+              }
+              if not params['InstanceId'] or not params['Name']:
+                  return response(400, {'error': 'instance_id and name are required'})
+              result = connect.create_hours_of_operation(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def update_hours_of_operation(connect, body):
+              params = {
+                  'InstanceId': body.get('instance_id'),
+                  'HoursOfOperationId': body.get('hours_of_operation_id'),
+                  'Name': body.get('name'),
+                  'Description': body.get('description'),
+                  'TimeZone': body.get('time_zone'),
+                  'Config': body.get('config')
+              }
+              if not params['InstanceId'] or not params['HoursOfOperationId']:
+                  return response(400, {'error': 'instance_id and hours_of_operation_id are required'})
+              result = connect.update_hours_of_operation(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def delete_hours_of_operation(connect, body):
+              params = {
+                  'InstanceId': body.get('instance_id'),
+                  'HoursOfOperationId': body.get('hours_of_operation_id')
+              }
+              if not params['InstanceId'] or not params['HoursOfOperationId']:
+                  return response(400, {'error': 'instance_id and hours_of_operation_id are required'})
+              result = connect.delete_hours_of_operation(**params)
+              return response(200, result)
+          
+          # Prompts API
+          def list_prompts(connect, body):
+              params = {'InstanceId': body.get('instance_id'), 'MaxResults': body.get('max_results', 100)}
+              if not params['InstanceId']:
+                  return response(400, {'error': 'instance_id is required'})
+              result = connect.list_prompts(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def create_prompt(connect, body):
+              params = {
+                  'InstanceId': body.get('instance_id'),
+                  'Name': body.get('name'),
+                  'Description': body.get('description'),
+                  'S3Uri': body.get('s3_uri'),
+                  'Tags': body.get('tags', {})
+              }
+              if not params['InstanceId'] or not params['Name']:
+                  return response(400, {'error': 'instance_id and name are required'})
+              result = connect.create_prompt(**{k: v for k, v in params.items() if v})
+              return response(200, result)
+          
+          def delete_prompt(connect, body):
+              params = {
+                  'InstanceId': body.get('instance_id'),
+                  'PromptId': body.get('prompt_id')
+              }
+              if not params['InstanceId'] or not params['PromptId']:
+                  return response(400, {'error': 'instance_id and prompt_id are required'})
+              result = connect.delete_prompt(**params)
+              return response(200, result)
+          
+          # Instances API
+          def list_instances(connect, body):
+              result = connect.list_instances()
+              return response(200, result)
+      Tags:
+        - Key: Project
+          Value: connect-api-bridge
+        - Key: Environment
+          Value: !Ref Environment
+
+  # =============================================================================
+  # Lambda Permission for API Gateway
+  # =============================================================================
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ConnectApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*'
+
+  # =============================================================================
+  # API Gateway REST API
+  # =============================================================================
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub 'connect-api-bridge-${Environment}'
+      Description: 'API Gateway for Amazon Connect MCP Lambda Bridge'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - PhoneNumbersListMethod
+      - PhoneNumbersSearchMethod
+      - PhoneNumbersClaimMethod
+      - PhoneNumbersReleaseMethod
+      - QueuesListMethod
+      - QueuesCreateMethod
+      - QueuesUpdateMethod
+      - QueuesDeleteMethod
+      - HoursOfOperationsListMethod
+      - HoursOfOperationsCreateMethod
+      - HoursOfOperationsUpdateMethod
+      - HoursOfOperationsDeleteMethod
+      - PromptsListMethod
+      - PromptsCreateMethod
+      - PromptsDeleteMethod
+      - InstancesListMethod
+      - HealthMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref Environment
+
+  # =============================================================================
+  # API Gateway Resources - Phone Numbers
+  # =============================================================================
+  PhoneNumbersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: phone-numbers
+
+  PhoneNumbersListMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref PhoneNumbersResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  PhoneNumbersSearchMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref PhoneNumbersResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      RequestValidatorId: !Ref RequestValidator
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  # =============================================================================
+  # API Gateway Resources - Queues
+  # =============================================================================
+  QueuesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: queues
+
+  QueuesListMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref QueuesResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  QueuesCreateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref QueuesResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  QueuesUpdateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref QueuesResource
+      HttpMethod: PUT
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  QueuesDeleteMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref QueuesResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  # =============================================================================
+  # API Gateway Resources - Hours of Operations
+  # =============================================================================
+  HoursOfOperationsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: hours-of-operations
+
+  HoursOfOperationsListMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref HoursOfOperationsResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  HoursOfOperationsCreateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref HoursOfOperationsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  HoursOfOperationsUpdateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref HoursOfOperationsResource
+      HttpMethod: PUT
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  HoursOfOperationsDeleteMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref HoursOfOperationsResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  # =============================================================================
+  # API Gateway Resources - Prompts
+  # =============================================================================
+  PromptsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: prompts
+
+  PromptsListMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref PromptsResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  PromptsCreateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref PromptsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  PromptsDeleteMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref PromptsResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  # =============================================================================
+  # API Gateway Resource - Instances
+  # =============================================================================
+  InstancesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: instances
+
+  InstancesListMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref InstancesResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+        - StatusCode: 400
+        - StatusCode: 500
+
+  # =============================================================================
+  # API Gateway Resource - Health
+  # =============================================================================
+  HealthResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: health
+
+  HealthMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref HealthResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+
+  # =============================================================================
+  # Request Validator
+  # =============================================================================
+  RequestValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      Name: !Sub 'connect-api-bridge-validator-${Environment}'
+      RestApiId: !Ref ApiGateway
+      ValidateRequestBody: false
+      ValidateRequestParameters: false
+
+Outputs:
+  ApiGatewayUrl:
+    Description: 'URL of the API Gateway endpoint'
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-api-url'
+
+  LambdaFunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt ConnectApiFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-lambda-arn'
+
+  LambdaFunctionName:
+    Description: 'Name of the Lambda function'
+    Value: !Ref ConnectApiFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-lambda-name'

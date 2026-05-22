@@ -112,7 +112,7 @@ python3 -m amazon_connect_mcp
 
 ## Quick Start: Deploy the Lambda Bridge
 
-The Lambda bridge is **optional but recommended** - it provides extended Connect APIs (phone number claiming, complex workflows, etc.). Follow these steps to deploy it.
+The Lambda bridge is **optional but recommended** - it provides extended Connect APIs (phone number claiming, complex workflows, etc.). This uses **AWS CloudFormation** (AWS native) - no Terraform required.
 
 ### Prerequisites
 
@@ -122,34 +122,28 @@ The Lambda bridge is **optional but recommended** - it provides extended Connect
    # Enter your AWS Access Key ID, Secret Access Key, region (e.g., us-east-1)
    ```
 
-2. **Terraform installed**:
+2. **Verify AWS CLI version** (need 2.0+):
    ```bash
-   # macOS with Homebrew
-   brew tap hashicorp/tap
-   brew install hashicorp/tap/terraform
-   
-   # Or download from https://developer.hashicorp.com/terraform/downloads
+   aws --version
    ```
 
-### Step 1: Clone and Prepare
+### Step 1: Clone the Repository
 
 ```bash
 git clone https://github.com/timmy-t-bot/amazon-connect-mcp.git
-cd amazon-connect-mcp/terraform
+cd amazon-connect-mcp
 ```
 
-### Step 2: Initialize Terraform
+### Step 2: Deploy CloudFormation Stack
+
+Use AWS CLI to create the CloudFormation stack:
 
 ```bash
-terraform init
-```
-
-This downloads the AWS provider plugins.
-
-### Step 3: Deploy the Infrastructure
-
-```bash
-terraform apply -auto-approve
+aws cloudformation create-stack \
+  --stack-name connect-api-bridge \
+  --template-body file://cloudformation/lambda-bridge.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameters ParameterKey=Environment,ParameterValue=prod
 ```
 
 This creates:
@@ -157,14 +151,23 @@ This creates:
 - API Gateway with 19 endpoints
 - CloudWatch logs
 
-⏱️ **Takes ~2-3 minutes**
+⏱️ **Takes ~3-5 minutes**
+
+### Step 3: Wait for Stack Creation
+
+```bash
+aws cloudformation wait stack-create-complete --stack-name connect-api-bridge
+```
 
 ### Step 4: Get the API Gateway URL
 
-After deployment succeeds, Terraform outputs the API URL:
+After deployment succeeds, get the API URL from CloudFormation outputs:
 
 ```bash
-terraform output api_gateway_url
+aws cloudformation describe-stacks \
+  --stack-name connect-api-bridge \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+  --output text
 ```
 
 Copy this URL - you'll need it for the next step.
@@ -203,19 +206,51 @@ mcp_servers:
 Verify it's working:
 
 ```bash
-curl $CONNECT_API_BRIDGE_URL/phone-numbers/list \
-  -H "Authorization: Bearer test" \
-  -H "x-amz-target: Connect.ListPhoneNumbers"
+export API_URL=$(aws cloudformation describe-stacks \
+  --stack-name connect-api-bridge \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+  --output text)
+
+curl "$API_URL/health"
 ```
 
-Expected: Returns a JSON response (even if empty)
+Expected output:
+```json
+{"status": "healthy", "version": "1.0.0"}
+```
+
+### Update the Stack (When Needed)
+
+To update the CloudFormation stack after making changes:
+
+```bash
+aws cloudformation update-stack \
+  --stack-name connect-api-bridge \
+  --template-body file://cloudformation/lambda-bridge.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameters ParameterKey=Environment,ParameterValue=prod
+```
+
+### View Stack Events
+
+To monitor stack creation progress:
+
+```bash
+aws cloudformation describe-stack-events \
+  --stack-name connect-api-bridge \
+  --query 'StackEvents[?ResourceStatus!=`CREATE_COMPLETE`].[LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+  --output table
+```
 
 ### Cleanup (When Needed)
 
-To delete all AWS resources created by Terraform:
+To delete all AWS resources created by CloudFormation:
 
 ```bash
-terraform destroy -auto-approve
+aws cloudformation delete-stack --stack-name connect-api-bridge
+
+# Wait for deletion to complete
+aws cloudformation wait stack-delete-complete --stack-name connect-api-bridge
 ```
 
 ---
@@ -479,9 +514,22 @@ await mcp.call_tool("connect_phone_numbers_claim", {
 - For Lambda tools, ensure `CONNECT_API_BRIDGE_URL` is set
 
 **"API Bridge not responding"**
-- Verify the Lambda bridge is deployed
-- Check `terraform output api_gateway_url`
+- Verify the CloudFormation stack is created: `aws cloudformation describe-stacks --stack-name connect-api-bridge`
+- Get the API URL:
+  ```bash
+  aws cloudformation describe-stacks \
+    --stack-name connect-api-bridge \
+    --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+    --output text
+  ```
 - Ensure `CONNECT_API_BRIDGE_ENABLED=true`
+
+**CloudFormation stack fails to create**
+- Check events for detailed error: `aws cloudformation describe-stack-events --stack-name connect-api-bridge`
+- Common causes:
+  - Missing IAM permissions
+  - Region not supported
+  - Resource limits exceeded
 
 ---
 
@@ -520,9 +568,10 @@ amazon-connect-mcp/
 │   └── contact_flows/            # Contact flow tools
 │       └── contact_flow_tools.py
 ├── lambda/                       # Lambda functions
-│   ├── connect_api_handler.py
-│   └── openapi.yaml
-├── terraform/                    # Infrastructure as Code
+├── cloudformation/               # CloudFormation templates
+│   ├── lambda-bridge.yaml
+│   └── README.md
+├── terraform/                    # Terraform (optional, legacy)
 ├── tests/                        # Test suite
 ├── docs/                         # Documentation
 │   ├── ARCHITECTURE.md
