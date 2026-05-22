@@ -1,0 +1,72 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/amazon-connect-mcp
+    permissions:
+      id-token: write
+    
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+      
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  publish-test-pypi:
+    name: Publish to Test PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/amazon-connect-mcp
+    permissions:
+      id-token: write
+    # Only run for pre-releases or if explicitly marked
+    if: github.event.release.prerelease == true
+    
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+      
+      - name: Publish to Test PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  verify-pypi:
+    name: Verify PyPI Publication
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      
+      - name: Wait for PyPI
+        run: sleep 30
+      
+      - name: Verify package is available
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          pip install amazon-connect-mcp==$VERSION
+          python -c "import amazon_connect_mcp; print(f'Successfully installed amazon-connect-mcp {amazon_connect_mcp.__version__}')"
+        continue-on-error: true

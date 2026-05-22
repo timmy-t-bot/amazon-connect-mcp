@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.zip
+.terraform/
+terraform.tfstate*
+.terraform.lock.hcl
+lambda_function.zip

@@ -1,0 +1,216 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'terraform/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'terraform/**'
+
+jobs:
+  lint:
+    name: Lint and Format
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff black
+    
+    - name: Run ruff linter
+      run: ruff check --output-format=github src tests
+    
+    - name: Run black format check
+      run: black --check --diff src tests
+    
+    - name: Check import sorting with ruff
+      run: ruff check --select I --output-format=github src tests
+
+  type-check:
+    name: Type Checking
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install mypy
+        pip install -e ".[test]"
+    
+    - name: Run mypy
+      run: mypy src/amazon_connect_mcp src/contact_flows --ignore-missing-imports --show-traceback
+
+  test:
+    name: Test Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-${{ matrix.python-version }}-pip-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.python-version }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[test]"
+    
+    - name: Run unit tests
+      run: |
+        pytest tests/ -v --tb=short -m "unit" --color=yes
+      env:
+        AWS_DEFAULT_REGION: us-east-1
+        AWS_ACCESS_KEY_ID: testing
+        AWS_SECRET_ACCESS_KEY: testing
+    
+    - name: Generate coverage report
+      run: |
+        pytest tests/ -v --cov=src/amazon_connect_mcp --cov=src/contact_flows --cov-report=xml --cov-report=term -m "unit"
+      env:
+        AWS_DEFAULT_REGION: us-east-1
+        AWS_ACCESS_KEY_ID: testing
+        AWS_SECRET_ACCESS_KEY: testing
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      if: matrix.python-version == '3.12'
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
+        verbose: true
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine check-wheel-contents
+    
+    - name: Build package
+      run: python -m build
+    
+    - name: Check wheel contents
+      run: check-wheel-contents dist/*.whl
+    
+    - name: Check package metadata
+      run: twine check dist/*
+    
+    - name: Try installing package
+      run: |
+        pip install dist/*.whl --force-reinstall
+        python -c "import amazon_connect_mcp; import contact_flows; print('Package installed successfully')"
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/
+        retention-days: 30
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Run Bandit security scanner
+      uses: PyCQA/bandit@main
+      with:
+        args: "-r src -f json -o bandit-report.json || true"
+    
+    - name: Check Bandit report
+      run: |
+        if grep -q "\[HIGH\]" bandit-report.json 2>/dev/null || \
+           python -c "import json; data=json.load(open('bandit-report.json')); exit(len([r for r in data.get('results',[]) if r['issue_severity'] in ['HIGH','MEDIUM']]))" 2>/dev/null; then
+          echo "No high severity issues found"
+        else
+          echo "Check bandit-report.json for security issues"
+        fi
+      continue-on-error: true
+
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ".[docs]"
+    
+    - name: Build documentation
+      run: |
+        mkdocs build --strict
+      continue-on-error: true

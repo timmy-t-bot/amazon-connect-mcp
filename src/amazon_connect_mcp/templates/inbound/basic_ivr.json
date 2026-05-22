@@ -1,0 +1,132 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "PlayWelcome",
+  "Actions": [
+    {
+      "Identifier": "PlayWelcome",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{welcome_message}}"
+      },
+      "Transitions": {
+        "NextAction": "CheckHours"
+      }
+    },
+    {
+      "Identifier": "CheckHours",
+      "Type": "CheckHoursOfOperation",
+      "Parameters": {
+        "HoursOfOperationId": "{{hours_of_operation_id}}"
+      },
+      "Transitions": {
+        "NextAction": "Menu",
+        "OutsideHoursAction": "OutsideHoursMessage"
+      }
+    },
+    {
+      "Identifier": "OutsideHoursMessage",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{outside_hours_message}}"
+      },
+      "Transitions": {
+        "NextAction": "LeaveVoicemail"
+      }
+    },
+    {
+      "Identifier": "LeaveVoicemail",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "Please leave a message after the tone."
+      },
+      "Transitions": {
+        "NextAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "Menu",
+      "Type": "GetUserInput",
+      "Parameters": {
+        "Text": "{{menu_prompt}}",
+        "LexV2Bot": {
+          "AliasArn": "{{lex_bot_arn}}"
+        }
+      },
+      "Transitions": {
+        "NextAction": "RouteIntent"
+      }
+    },
+    {
+      "Identifier": "RouteIntent",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {
+        "LambdaFunctionARN": "{{routing_lambda_arn}}",
+        "InvocationTimeLimitSeconds": 8
+      },
+      "Transitions": {
+        "NextAction": "TransferToQueue"
+      }
+    },
+    {
+      "Identifier": "TransferToQueue",
+      "Type": "TransferToQueue",
+      "Parameters": {
+        "QueueId": "{{default_queue_id}}",
+        "ContactFlowId": "{{queue_transfer_flow_id}}"
+      },
+      "Transitions": {
+        "NextAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "Disconnect",
+      "Type": "DisconnectParticipant",
+      "Parameters": {}
+    }
+  ],
+  "Variables": {
+    "welcome_message": {
+      "type": "string",
+      "required": true,
+      "description": "Welcome message for inbound calls",
+      "ssml_enabled": true
+    },
+    "menu_prompt": {
+      "type": "string",
+      "required": true,
+      "description": "Menu options prompt",
+      "ssml_enabled": true
+    },
+    "outside_hours_message": {
+      "type": "string",
+      "required": true,
+      "description": "Message when outside business hours"
+    },
+    "hours_of_operation_id": {
+      "type": "string",
+      "required": true,
+      "description": "Hours of operation ID"
+    },
+    "lex_bot_arn": {
+      "type": "arn",
+      "required": true,
+      "description": "Lex bot ARN for intent recognition"
+    },
+    "routing_lambda_arn": {
+      "type": "arn",
+      "required": true,
+      "description": "Lambda ARN for routing logic"
+    },
+    "default_queue_id": {
+      "type": "string",
+      "required": true,
+      "description": "Default queue ID for transfers"
+    },
+    "queue_transfer_flow_id": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Contact flow ID for queue transfer"
+    }
+  }
+}

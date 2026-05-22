@@ -1,0 +1,93 @@
+{
+  "name": "amazon-connect-mcp",
+  "description": "MCP Server for Amazon Connect outbound communication and infrastructure management",
+  "homepage": "https://github.com/nousresearch/amazon-connect-mcp",
+  "topics": [
+    "mcp",
+    "amazon-connect",
+    "contact-center",
+    "outbound-calling",
+    "aws",
+    "ai-agents",
+    "model-context-protocol",
+    "python",
+    "telephony",
+    "communication"
+  ],
+  "visibility": "public",
+  "has_issues": true,
+  "has_projects": true,
+  "has_wiki": false,
+  "has_discussions": true,
+  "allow_merge_commit": true,
+  "allow_squash_merge": true,
+  "allow_rebase_merge": true,
+  "delete_branch_on_merge": true,
+  "allow_auto_merge": false,
+  "allow_update_branch": true,
+  "squash_merge_commit_message": "PR_BODY",
+  "squash_merge_commit_title": "PR_TITLE",
+  "is_template": false,
+  "archived": false,
+  "license": "mit",
+  "default_branch": "main",
+  "branch_protection": {
+    "main": {
+      "required_status_checks": {
+        "strict": true,
+        "contexts": [
+          "test",
+          "lint"
+        ]
+      },
+      "enforce_admins": false,
+      "required_pull_request_reviews": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": true
+      },
+      "restrictions": null,
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "required_conversation_resolution": true
+    }
+  },
+  "environments": [
+    {
+      "name": "pypi",
+      "deployment_branch_policy": {
+        "protected_branches_only": true,
+        "custom_branch_policies": false
+      }
+    },
+    {
+      "name": "testpypi",
+      "deployment_branch_policy": {
+        "protected_branches_only": false,
+        "custom_branch_policies": true
+      }
+    }
+  ],
+  "team": {
+    "maintainers": [
+      "nousresearch/maintainers"
+    ]
+  },
+  "package": {
+    "name": "amazon-connect-mcp",
+    "version": "0.1.0",
+    "python_version": "3.11",
+    "license": "MIT"
+  },
+  "ci": {
+    "workflows": [
+      "tests.yml",
+      "release.yml",
+      "publish.yml"
+    ],
+    "required_checks": [
+      "test",
+      "lint"
+    ]
+  }
+}

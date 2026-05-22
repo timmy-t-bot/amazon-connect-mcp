@@ -1,0 +1,1297 @@
+openapi: 3.0.3
+info:
+  title: Amazon Connect API Bridge
+  description: |
+    AWS Lambda and API Gateway bridge for Amazon Connect APIs not directly exposed by existing MCP tools.
+    
+    This API provides endpoints for:
+    - Phone number management
+    - Instance configuration
+    - Queue management
+    - Hours of operation
+    - Custom prompts/announcements
+  version: 1.0.0
+  contact:
+    name: Amazon Connect MCP Team
+servers:
+  - url: https://{api-id}.execute-api.{region}.amazonaws.com/{stage}
+    variables:
+      api-id:
+        default: YOUR_API_GATEWAY_ID
+        description: API Gateway REST API ID
+      region:
+        default: us-east-1
+        description: AWS Region
+      stage:
+        default: prod
+        description: Deployment stage (dev, staging, prod)
+
+tags:
+  - name: Phone Numbers
+    description: Phone number claiming and management
+  - name: Instances
+    description: Connect instance management
+  - name: Queues
+    description: Queue management
+  - name: Hours of Operation
+    description: Hours of operation configuration
+  - name: Prompts
+    description: Custom prompts and announcements
+
+paths:
+  /phone-numbers/search:
+    post:
+      summary: Search available phone numbers
+      description: Search for available phone numbers that can be claimed for a Connect instance
+      tags:
+        - Phone Numbers
+      operationId: searchAvailablePhoneNumbers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchPhoneNumbersRequest'
+      responses:
+        '200':
+          description: Successfully found phone numbers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhoneNumberListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /phone-numbers/claim:
+    post:
+      summary: Claim a phone number
+      description: Claim a specific phone number or auto-claim an available number
+      tags:
+        - Phone Numbers
+      operationId: claimPhoneNumber
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimPhoneNumberRequest'
+      responses:
+        '200':
+          description: Successfully claimed phone number
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimPhoneNumberResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /phone-numbers/release:
+    post:
+      summary: Release a phone number
+      description: Release a claimed phone number
+      tags:
+        - Phone Numbers
+      operationId: releasePhoneNumber
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleasePhoneNumberRequest'
+      responses:
+        '200':
+          description: Successfully released phone number
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /phone-numbers/list:
+    get:
+      summary: List phone numbers
+      description: List all phone numbers for a Connect instance
+      tags:
+        - Phone Numbers
+      operationId: listPhoneNumbers
+      parameters:
+        - name: InstanceId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Connect instance ID
+        - name: MaxResults
+          in: query
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of results
+        - name: PhoneNumberCountryCodes
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+          description: Filter by country codes
+        - name: PhoneNumberTypes
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [DID, TOLL_FREE]
+          description: Filter by phone number types
+      responses:
+        '200':
+          description: Successfully retrieved phone numbers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhoneNumberSummaryListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /instances/list:
+    get:
+      summary: List instances
+      description: List all Connect instances in the account
+      tags:
+        - Instances
+      operationId: listInstances
+      parameters:
+        - name: MaxResults
+          in: query
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of results
+      responses:
+        '200':
+          description: Successfully retrieved instances
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /instances/describe:
+    get:
+      summary: Describe instance
+      description: Get detailed information about a Connect instance
+      tags:
+        - Instances
+      operationId: describeInstance
+      parameters:
+        - name: InstanceId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved instance details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /instances/update:
+    post:
+      summary: Update instance
+      description: Update Connect instance settings
+      tags:
+        - Instances
+      operationId: updateInstance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateInstanceRequest'
+      responses:
+        '200':
+          description: Successfully updated instance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /queues/list:
+    get:
+      summary: List queues
+      description: List all queues for a Connect instance
+      tags:
+        - Queues
+      operationId: listQueues
+      parameters:
+        - name: InstanceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: QueueTypes
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [STANDARD, AGENT]
+        - name: MaxResults
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successfully retrieved queues
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /queues/describe:
+    get:
+      summary: Describe queue
+      description: Get detailed information about a queue
+      tags:
+        - Queues
+      operationId: describeQueue
+      parameters:
+        - name: InstanceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: QueueId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved queue details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /queues/create:
+    post:
+      summary: Create queue
+      description: Create a new queue
+      tags:
+        - Queues
+      operationId: createQueue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateQueueRequest'
+      responses:
+        '200':
+          description: Successfully created queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateQueueResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /queues/update:
+    post:
+      summary: Update queue
+      description: Update an existing queue
+      tags:
+        - Queues
+      operationId: updateQueue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateQueueRequest'
+      responses:
+        '200':
+          description: Successfully updated queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /queues/delete:
+    post:
+      summary: Delete queue
+      description: Delete a queue
+      tags:
+        - Queues
+      operationId: deleteQueue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteQueueRequest'
+      responses:
+        '200':
+          description: Successfully deleted queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /hours-of-operations/list:
+    get:
+      summary: List hours of operation
+      description: List all hours of operation configurations
+      tags:
+        - Hours of Operation
+      operationId: listHoursOfOperations
+      parameters:
+        - name: InstanceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: MaxResults
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successfully retrieved hours of operations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HoursOfOperationListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /hours-of-operations/describe:
+    get:
+      summary: Describe hours of operation
+      description: Get detailed information about hours of operation
+      tags:
+        - Hours of Operation
+      operationId: describeHoursOfOperation
+      parameters:
+        - name: InstanceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: HoursOfOperationId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved hours of operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HoursOfOperationResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /hours-of-operations/create:
+    post:
+      summary: Create hours of operation
+      description: Create new hours of operation
+      tags:
+        - Hours of Operation
+      operationId: createHoursOfOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateHoursOfOperationRequest'
+      responses:
+        '200':
+          description: Successfully created hours of operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateHoursOfOperationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /hours-of-operations/update:
+    post:
+      summary: Update hours of operation
+      description: Update existing hours of operation
+      tags:
+        - Hours of Operation
+      operationId: updateHoursOfOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateHoursOfOperationRequest'
+      responses:
+        '200':
+          description: Successfully updated hours of operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /hours-of-operations/delete:
+    post:
+      summary: Delete hours of operation
+      description: Delete hours of operation configuration
+      tags:
+        - Hours of Operation
+      operationId: deleteHoursOfOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteHoursOfOperationRequest'
+      responses:
+        '200':
+          description: Successfully deleted hours of operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /hours-of-operations/list-overrides:
+    get:
+      summary: List hours of operation overrides
+      description: List overrides for hours of operation (holidays, special hours)
+      tags:
+        - Hours of Operation
+      operationId: listHoursOfOperationOverrides
+      parameters:
+        - name: InstanceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: HoursOfOperationId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: MaxResults
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successfully retrieved overrides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HoursOfOperationOverrideListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /prompts/list:
+    get:
+      summary: List prompts
+      description: List all custom prompts
+      tags:
+        - Prompts
+      operationId: listPrompts
+      parameters:
+        - name: InstanceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: MaxResults
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successfully retrieved prompts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptListResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /prompts/describe:
+    get:
+      summary: Describe prompt
+      description: Get detailed information about a prompt
+      tags:
+        - Prompts
+      operationId: describePrompt
+      parameters:
+        - name: InstanceId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: PromptId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully retrieved prompt details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /prompts/create:
+    post:
+      summary: Create prompt
+      description: Create a new custom prompt from S3 audio file
+      tags:
+        - Prompts
+      operationId: createPrompt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePromptRequest'
+      responses:
+        '200':
+          description: Successfully created prompt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatePromptResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /prompts/delete:
+    post:
+      summary: Delete prompt
+      description: Delete a custom prompt
+      tags:
+        - Prompts
+      operationId: deletePrompt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeletePromptRequest'
+      responses:
+        '200':
+          description: Successfully deleted prompt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  schemas:
+    # Phone Number Schemas
+    SearchPhoneNumbersRequest:
+      type: object
+      required:
+        - PhoneNumberCountryCode
+        - PhoneNumberType
+      properties:
+        PhoneNumberCountryCode:
+          type: string
+          description: ISO country code (e.g., US, UK, CA)
+          example: US
+        PhoneNumberType:
+          type: string
+          enum: [DID, TOLL_FREE]
+          example: DID
+        TargetArn:
+          type: string
+          description: ARN of the target (instance or queue)
+          example: arn:aws:connect:us-east-1:123456789012:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+        PhoneNumberPrefix:
+          type: string
+          description: Optional prefix filter
+          example: "+1800"
+        MaxResults:
+          type: integer
+          description: Maximum number of results
+          default: 50
+
+    ClaimPhoneNumberRequest:
+      type: object
+      required:
+        - InstanceId
+      properties:
+        InstanceId:
+          type: string
+          description: Connect instance ID
+        PhoneNumber:
+          type: string
+          description: Specific phone number to claim
+          example: +1-800-555-0123
+        PhoneNumberCountryCode:
+          type: string
+          description: Country code for auto-claim
+        PhoneNumberType:
+          type: string
+          enum: [DID, TOLL_FREE]
+          description: Type for auto-claim
+        TargetArn:
+          type: string
+          description: ARN where to assign the number
+        Description:
+          type: string
+          description: Description for the phone number
+        Tags:
+          type: object
+          description: Tags for the phone number
+
+    ReleasePhoneNumberRequest:
+      type: object
+      required:
+        - InstanceId
+      properties:
+        InstanceId:
+          type: string
+        PhoneNumberId:
+          type: string
+          description: ID of the phone number to release
+
+    PhoneNumberItem:
+      type: object
+      properties:
+        phone_number:
+          type: string
+        phone_number_country_code:
+          type: string
+        phone_number_type:
+          type: string
+
+    PhoneNumberListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        phone_numbers:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhoneNumberItem'
+        next_token:
+          type: string
+
+    PhoneNumberSummaryItem:
+      type: object
+      properties:
+        id:
+          type: string
+        arn:
+          type: string
+        phone_number:
+          type: string
+        country_code:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+        description:
+          type: string
+        target_arn:
+          type: string
+        tags:
+          type: object
+
+    PhoneNumberSummaryListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        phone_numbers:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhoneNumberSummaryItem'
+        next_token:
+          type: string
+
+    ClaimPhoneNumberResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        phone_number_id:
+          type: string
+        phone_number_arn:
+          type: string
+
+    # Instance Schemas
+    InstanceItem:
+      type: object
+      properties:
+        id:
+          type: string
+        arn:
+          type: string
+        identity_management_type:
+          type: string
+        instance_alias:
+          type: string
+        created_time:
+          type: string
+          format: date-time
+        service_role:
+          type: string
+        instance_status:
+          type: string
+        status_reason:
+          type: string
+        inbound_calls_enabled:
+          type: boolean
+        outbound_calls_enabled:
+          type: boolean
+
+    InstanceListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        instances:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstanceItem'
+        next_token:
+          type: string
+
+    InstanceResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        instance:
+          $ref: '#/components/schemas/InstanceItem'
+
+    UpdateInstanceRequest:
+      type: object
+      required:
+        - InstanceId
+      properties:
+        InstanceId:
+          type: string
+        InboundCallsEnabled:
+          type: boolean
+        OutboundCallsEnabled:
+          type: boolean
+        ContactFlowLogsEnabled:
+          type: boolean
+        ContactLensAnalyticsEnabled:
+          type: boolean
+
+    # Queue Schemas
+    QueueSummaryItem:
+      type: object
+      properties:
+        id:
+          type: string
+        arn:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        tags:
+          type: object
+
+    QueueListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        queues:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueSummaryItem'
+        next_token:
+          type: string
+
+    QueueItem:
+      type: object
+      properties:
+        id:
+          type: string
+        arn:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+        hours_of_operation_id:
+          type: string
+        max_contacts:
+          type: integer
+        outbound_caller_config:
+          type: object
+        quick_connect_ids:
+          type: array
+          items:
+            type: string
+        tags:
+          type: object
+
+    QueueResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        queue:
+          $ref: '#/components/schemas/QueueItem'
+
+    CreateQueueRequest:
+      type: object
+      required:
+        - InstanceId
+        - Name
+        - HoursOfOperationId
+      properties:
+        InstanceId:
+          type: string
+        Name:
+          type: string
+          description: Queue name
+        Description:
+          type: string
+        HoursOfOperationId:
+          type: string
+        MaxContacts:
+          type: integer
+          description: Maximum contacts in queue
+        QuickConnectIds:
+          type: array
+          items:
+            type: string
+        Tags:
+          type: object
+
+    CreateQueueResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        queue_id:
+          type: string
+        queue_arn:
+          type: string
+
+    UpdateQueueRequest:
+      type: object
+      required:
+        - InstanceId
+        - QueueId
+      properties:
+        InstanceId:
+          type: string
+        QueueId:
+          type: string
+        Name:
+          type: string
+        Description:
+          type: string
+        HoursOfOperationId:
+          type: string
+        MaxContacts:
+          type: integer
+        Status:
+          type: string
+        QuickConnectIds:
+          type: array
+          items:
+            type: string
+        OutboundCallerConfig:
+          type: object
+
+    DeleteQueueRequest:
+      type: object
+      required:
+        - InstanceId
+        - QueueId
+      properties:
+        InstanceId:
+          type: string
+        QueueId:
+          type: string
+
+    # Hours of Operation Schemas
+    HoursOfOperationSummaryItem:
+      type: object
+      properties:
+        id:
+          type: string
+        arn:
+          type: string
+        name:
+          type: string
+
+    HoursOfOperationListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        hours_of_operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/HoursOfOperationSummaryItem'
+        next_token:
+          type: string
+
+    HoursOfOperationTimeSlot:
+      type: object
+      properties:
+        day:
+          type: string
+          enum: [SUNDAY, MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY]
+        start_time:
+          type: object
+          properties:
+            Hours:
+              type: integer
+              minimum: 0
+              maximum: 23
+            Minutes:
+              type: integer
+              minimum: 0
+              maximum: 59
+        end_time:
+          type: object
+          properties:
+            Hours:
+              type: integer
+              minimum: 0
+              maximum: 23
+            Minutes:
+              type: integer
+              minimum: 0
+              maximum: 59
+
+    HoursOfOperationItem:
+      type: object
+      properties:
+        id:
+          type: string
+        arn:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        time_zone:
+          type: string
+          example: America/New_York
+        config:
+          type: array
+          items:
+            $ref: '#/components/schemas/HoursOfOperationTimeSlot'
+        tags:
+          type: object
+
+    HoursOfOperationResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        hours_of_operation:
+          $ref: '#/components/schemas/HoursOfOperationItem'
+
+    CreateHoursOfOperationRequest:
+      type: object
+      required:
+        - InstanceId
+        - Name
+        - TimeZone
+        - Config
+      properties:
+        InstanceId:
+          type: string
+        Name:
+          type: string
+        Description:
+          type: string
+        TimeZone:
+          type: string
+          example: America/New_York
+        Config:
+          type: array
+          items:
+            $ref: '#/components/schemas/HoursOfOperationTimeSlot'
+        Tags:
+          type: object
+
+    CreateHoursOfOperationResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        hours_of_operation_id:
+          type: string
+        hours_of_operation_arn:
+          type: string
+
+    UpdateHoursOfOperationRequest:
+      type: object
+      required:
+        - InstanceId
+        - HoursOfOperationId
+      properties:
+        InstanceId:
+          type: string
+        HoursOfOperationId:
+          type: string
+        Name:
+          type: string
+        Description:
+          type: string
+        TimeZone:
+          type: string
+        Config:
+          type: array
+          items:
+            $ref: '#/components/schemas/HoursOfOperationTimeSlot'
+
+    DeleteHoursOfOperationRequest:
+      type: object
+      required:
+        - InstanceId
+        - HoursOfOperationId
+      properties:
+        InstanceId:
+          type: string
+        HoursOfOperationId:
+          type: string
+
+    HoursOfOperationOverrideItem:
+      type: object
+      properties:
+        id:
+          type: string
+        description:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+        override_config:
+          type: array
+          items:
+            $ref: '#/components/schemas/HoursOfOperationTimeSlot'
+
+    HoursOfOperationOverrideListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        overrides:
+          type: array
+          items:
+            $ref: '#/components/schemas/HoursOfOperationOverrideItem'
+        next_token:
+          type: string
+
+    # Prompt Schemas
+    PromptSummaryItem:
+      type: object
+      properties:
+        id:
+          type: string
+        arn:
+          type: string
+        name:
+          type: string
+
+    PromptListResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        prompts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PromptSummaryItem'
+        next_token:
+          type: string
+
+    PromptItem:
+      type: object
+      properties:
+        id:
+          type: string
+        arn:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        s3_uri:
+          type: string
+        tags:
+          type: object
+
+    PromptResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        prompt:
+          $ref: '#/components/schemas/PromptItem'
+
+    CreatePromptRequest:
+      type: object
+      required:
+        - InstanceId
+        - Name
+        - S3Uri
+      properties:
+        InstanceId:
+          type: string
+        Name:
+          type: string
+        S3Uri:
+          type: string
+          description: S3 URI to audio file
+          example: s3://my-bucket/prompts/welcome-message.wav
+        Description:
+          type: string
+        Tags:
+          type: object
+
+    CreatePromptResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        prompt_arn:
+          type: string
+        prompt_id:
+          type: string
+
+    DeletePromptRequest:
+      type: object
+      required:
+        - InstanceId
+        - PromptId
+      properties:
+        InstanceId:
+          type: string
+        PromptId:
+          type: string
+
+    # Common Schemas
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [success]
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [error]
+        error:
+          type: string
+        message:
+          type: string
+
+  responses:
+    Success:
+      description: Successful operation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SuccessResponse'
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

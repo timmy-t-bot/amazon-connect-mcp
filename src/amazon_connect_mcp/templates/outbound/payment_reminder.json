@@ -1,0 +1,129 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "PlayGreeting",
+  "Actions": [
+    {
+      "Identifier": "PlayGreeting",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{greeting_message}}"
+      },
+      "Transitions": {
+        "NextAction": "CheckBalance"
+      }
+    },
+    {
+      "Identifier": "CheckBalance",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{payment_message}} The amount due is {{amount_due}}. {{payment_options}}"
+      },
+      "Transitions": {
+        "NextAction": "AskPayment"
+      }
+    },
+    {
+      "Identifier": "AskPayment",
+      "Type": "GetUserInput",
+      "Parameters": {
+        "Text": "Would you like to make a payment now? Please say yes or no.",
+        "LexV2Bot": {
+          "AliasArn": "{{lex_bot_arn}}"
+        }
+      },
+      "Transitions": {
+        "NextAction": "ProcessPayment"
+      }
+    },
+    {
+      "Identifier": "ProcessPayment",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {
+        "LambdaFunctionARN": "{{payment_lambda_arn}}",
+        "InvocationTimeLimitSeconds": 8
+      },
+      "Transitions": {
+        "NextAction": "PaymentResult"
+      }
+    },
+    {
+      "Identifier": "PaymentResult",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{payment_response}}"
+      },
+      "Transitions": {
+        "NextAction": "SetAttributes"
+      }
+    },
+    {
+      "Identifier": "SetAttributes",
+      "Type": "UpdateContactAttributes",
+      "Parameters": {
+        "Attributes": {
+          "payment_status": "{{payment_status}}",
+          "amount_due": "{{amount_due}}",
+          "account_number": "{{account_number}}"
+        }
+      },
+      "Transitions": {
+        "NextAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "Disconnect",
+      "Type": "DisconnectParticipant",
+      "Parameters": {}
+    }
+  ],
+  "Variables": {
+    "greeting_message": {
+      "type": "string",
+      "required": true,
+      "description": "Greeting message to play",
+      "ssml_enabled": true
+    },
+    "payment_message": {
+      "type": "string",
+      "required": true,
+      "description": "Message about the payment reminder"
+    },
+    "amount_due": {
+      "type": "string",
+      "required": true,
+      "description": "Amount due (as string, e.g., '$50.00')"
+    },
+    "payment_options": {
+      "type": "string",
+      "required": false,
+      "default": "You can pay by phone or online.",
+      "description": "Payment method options"
+    },
+    "lex_bot_arn": {
+      "type": "arn",
+      "required": true,
+      "description": "Lex bot ARN for payment confirmation"
+    },
+    "payment_lambda_arn": {
+      "type": "arn",
+      "required": true,
+      "description": "Lambda ARN for payment processing"
+    },
+    "payment_response": {
+      "type": "string",
+      "required": true,
+      "description": "Response message after payment attempt"
+    },
+    "payment_status": {
+      "type": "enum",
+      "values": ["completed", "declined", "callback_requested", "no_response"],
+      "default": "no_response",
+      "description": "Status of payment processing"
+    },
+    "account_number": {
+      "type": "string",
+      "required": true,
+      "description": "Account identifier"
+    }
+  }
+}

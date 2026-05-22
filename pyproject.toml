@@ -1,0 +1,161 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amazon-connect-mcp"
+version = "0.1.0"
+description = "MCP Server for Amazon Connect outbound communication and infrastructure management"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Amazon Connect MCP Team"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Telephony",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = ["amazon", "connect", "mcp", "outbound", "contact-center"]
+requires-python = ">=3.10"
+
+dependencies = [
+    "mcp>=1.0.0",
+    "boto3>=1.28.0",
+    "botocore>=1.31.0",
+    "requests>=2.31.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "pre-commit>=3.4.0",
+]
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "moto>=4.2.0",
+]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocstrings>=0.23.0",
+    "mkdocstrings-python>=1.7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/nousresearch/amazon-connect-mcp"
+Documentation = "https://github.com/nousresearch/amazon-connect-mcp/tree/main/docs"
+Repository = "https://github.com/nousresearch/amazon-connect-mcp"
+"Bug Tracker" = "https://github.com/nousresearch/amazon-connect-mcp/issues"
+
+[project.scripts]
+amazon-connect-mcp = "amazon_connect_mcp.server:mcp.run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/amazon_connect_mcp", "src/contact_flows"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/docs",
+    "/tests",
+    "/terraform",
+    "/lambda",
+    "/scripts",
+    "/README.md",
+    "/LICENSE",
+]
+
+# Black formatter configuration
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+include = '''\\.pyi?$'''
+
+# Ruff linter configuration
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = [
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "W",   # pycodestyle warnings
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # Line too long (handled by black)
+]
+
+[tool.ruff.pydocstyle]
+convention = "google"
+
+# Mypy type checker configuration
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = false
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "integration: marks tests as integration tests (requires AWS credentials)",
+    "unit: marks tests as unit tests",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "@(abc.)?abstractmethod",
+]

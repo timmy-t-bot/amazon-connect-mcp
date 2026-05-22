@@ -1,0 +1,131 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "PlayGreeting",
+  "Actions": [
+    {
+      "Identifier": "PlayGreeting",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{greeting_message}}",
+        "SSML": "{{greeting_ssml}}"
+      },
+      "Transitions": {
+        "NextAction": "CheckAppointmentTime"
+      }
+    },
+    {
+      "Identifier": "CheckAppointmentTime",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "Your appointment is scheduled for {{appointment_time}}. {{appointment_details}}"
+      },
+      "Transitions": {
+        "NextAction": "AskConfirmation"
+      }
+    },
+    {
+      "Identifier": "AskConfirmation",
+      "Type": "GetUserInput",
+      "Parameters": {
+        "Text": "Please say yes to confirm you will attend, or no if you need to reschedule.",
+        "LexV2Bot": {
+          "AliasArn": "{{lex_bot_arn}}"
+        }
+      },
+      "Transitions": {
+        "NextAction": "ProcessConfirmation"
+      }
+    },
+    {
+      "Identifier": "ProcessConfirmation",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {
+        "LambdaFunctionARN": "{{lambda_arn}}",
+        "InvocationTimeLimitSeconds": 8
+      },
+      "Transitions": {
+        "NextAction": "PlayResult"
+      }
+    },
+    {
+      "Identifier": "PlayResult",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{confirmation_response}} Thank you for your time. Goodbye."
+      },
+      "Transitions": {
+        "NextAction": "SetAttributes"
+      }
+    },
+    {
+      "Identifier": "SetAttributes",
+      "Type": "UpdateContactAttributes",
+      "Parameters": {
+        "Attributes": {
+          "appointment_reminder": "completed",
+          "confirmation_status": "{{confirmation_status}}",
+          "appointment_id": "{{appointment_id}}"
+        }
+      },
+      "Transitions": {
+        "NextAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "Disconnect",
+      "Type": "DisconnectParticipant",
+      "Parameters": {}
+    }
+  ],
+  "Variables": {
+    "greeting_message": {
+      "type": "string",
+      "required": true,
+      "description": "Greeting to play at call start",
+      "ssml_enabled": true
+    },
+    "greeting_ssml": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "SSML version of greeting"
+    },
+    "appointment_time": {
+      "type": "string",
+      "required": true,
+      "description": "The scheduled appointment time to announce"
+    },
+    "appointment_details": {
+      "type": "string",
+      "required": false,
+      "default": "Please arrive 10 minutes early.",
+      "description": "Additional appointment information"
+    },
+    "appointment_id": {
+      "type": "string",
+      "required": true,
+      "description": "Unique identifier for the appointment"
+    },
+    "lex_bot_arn": {
+      "type": "arn",
+      "required": true,
+      "description": "Lex bot ARN for confirmation handling"
+    },
+    "lambda_arn": {
+      "type": "arn",
+      "required": true,
+      "description": "Lambda ARN for processing confirmation"
+    },
+    "confirmation_response": {
+      "type": "string",
+      "required": true,
+      "description": "Response based on user confirmation"
+    },
+    "confirmation_status": {
+      "type": "enum",
+      "values": ["confirmed", "reschedule_requested", "no_response"],
+      "default": "no_response",
+      "description": "Confirmation status from user"
+    }
+  }
+}

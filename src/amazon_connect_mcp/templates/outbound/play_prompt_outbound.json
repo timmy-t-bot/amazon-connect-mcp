@@ -1,0 +1,56 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "PlayPrompt",
+  "Actions": [
+    {
+      "Identifier": "PlayPrompt",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{prompt_text}}",
+        "SSML": "{{prompt_ssml}}"
+      },
+      "Transitions": {
+        "NextAction": "SetCallAttributes"
+      }
+    },
+    {
+      "Identifier": "SetCallAttributes",
+      "Type": "UpdateContactAttributes",
+      "Parameters": {
+        "Attributes": {
+          "call_type": "OUTBOUND_STATIC_PROMPT",
+          "message_delivered": "true",
+          "campaign_id": "{{campaign_id}}"
+        }
+      },
+      "Transitions": {
+        "NextAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "Disconnect",
+      "Type": "DisconnectParticipant",
+      "Parameters": {}
+    }
+  ],
+  "Variables": {
+    "prompt_text": {
+      "type": "string",
+      "required": true,
+      "description": "The TTS message to play to the caller",
+      "ssml_enabled": true
+    },
+    "prompt_ssml": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "SSML version of the prompt for enhanced TTS"
+    },
+    "campaign_id": {
+      "type": "string",
+      "required": false,
+      "default": "outbound",
+      "description": "Campaign identifier for tracking"
+    }
+  }
+}
