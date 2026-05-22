@@ -381,7 +381,7 @@ await mcp.call_tool("get_server_info")
 
 ```bash
 # Clone repository
-git clone https://github.com/nousresearch/amazon-connect-mcp.git
+git clone https://github.com/timmy-t-bot/amazon-connect-mcp.git
 cd amazon-connect-mcp
 
 # Install with dev dependencies
@@ -494,6 +494,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-For issues and feature requests, please use the [GitHub Issues](https://github.com/nousresearch/amazon-connect-mcp/issues) page.
+For issues and feature requests, please use the [GitHub Issues](https://github.com/timmy-t-bot/amazon-connect-mcp/issues) page.
 
-For discussions and questions, use [GitHub Discussions](https://github.com/nousresearch/amazon-connect-mcp/discussions).
+For discussions and questions, use [GitHub Discussions](https://github.com/timmy-t-bot/amazon-connect-mcp/discussions).

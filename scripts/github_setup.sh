@@ -4,7 +4,7 @@
 
 # Configuration
 REPO_NAME="amazon-connect-mcp"
-REPO_OWNER="nousresearch"
+REPO_OWNER="timmy-t-bot"
 VISIBILITY="public"
 
 # ============================================

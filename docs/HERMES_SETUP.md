@@ -506,7 +506,7 @@ Before deploying to production:
 
 ### Resources
 
-- [Amazon Connect MCP Documentation](https://github.com/nousresearch/amazon-connect-mcp)
+- [Amazon Connect MCP Documentation](https://github.com/timmy-t-bot/amazon-connect-mcp)
 - [AWS Connect API Reference](https://docs.aws.amazon.com/connect/latest/APIReference/)
 - [Hermes Documentation](https://hermes-agent.nousresearch.com/docs)
 

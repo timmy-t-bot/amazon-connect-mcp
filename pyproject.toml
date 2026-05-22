@@ -57,10 +57,10 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/nousresearch/amazon-connect-mcp"
-Documentation = "https://github.com/nousresearch/amazon-connect-mcp/tree/main/docs"
-Repository = "https://github.com/nousresearch/amazon-connect-mcp"
-"Bug Tracker" = "https://github.com/nousresearch/amazon-connect-mcp/issues"
+Homepage = "https://github.com/timmy-t-bot/amazon-connect-mcp"
+Documentation = "https://github.com/timmy-t-bot/amazon-connect-mcp/tree/main/docs"
+Repository = "https://github.com/timmy-t-bot/amazon-connect-mcp"
+"Bug Tracker" = "https://github.com/timmy-t-bot/amazon-connect-mcp/issues"
 
 [project.scripts]
 amazon-connect-mcp = "amazon_connect_mcp.server:mcp.run"
