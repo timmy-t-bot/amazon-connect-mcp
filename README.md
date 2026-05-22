@@ -39,10 +39,10 @@ The server provides **100+ MCP tools** organized into categories:
 ## Table of Contents
 
 - [Installation](#installation)
+- [Quick Start: Deploy Lambda Bridge](#quick-start-deploy-the-lambda-bridge)
 - [Configuration](#configuration)
-- [Quick Start](#quick-start)
-- [Usage Examples](#usage-examples)
 - [Tool Inventory](#tool-inventory)
+- [Usage Examples](#usage-examples)
 - [Security Considerations](#security-considerations)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
@@ -107,6 +107,118 @@ Once that finishes successfully, start the module. Because your Mac defaults to 
 ```bash
 python3 -m amazon_connect_mcp
 ```
+
+---
+
+## Quick Start: Deploy the Lambda Bridge
+
+The Lambda bridge is **optional but recommended** - it provides extended Connect APIs (phone number claiming, complex workflows, etc.). Follow these steps to deploy it.
+
+### Prerequisites
+
+1. **AWS CLI installed and configured**:
+   ```bash
+   aws configure
+   # Enter your AWS Access Key ID, Secret Access Key, region (e.g., us-east-1)
+   ```
+
+2. **Terraform installed**:
+   ```bash
+   # macOS with Homebrew
+   brew tap hashicorp/tap
+   brew install hashicorp/tap/terraform
+   
+   # Or download from https://developer.hashicorp.com/terraform/downloads
+   ```
+
+### Step 1: Clone and Prepare
+
+```bash
+git clone https://github.com/timmy-t-bot/amazon-connect-mcp.git
+cd amazon-connect-mcp/terraform
+```
+
+### Step 2: Initialize Terraform
+
+```bash
+terraform init
+```
+
+This downloads the AWS provider plugins.
+
+### Step 3: Deploy the Infrastructure
+
+```bash
+terraform apply -auto-approve
+```
+
+This creates:
+- Lambda function with IAM role
+- API Gateway with 19 endpoints
+- CloudWatch logs
+
+⏱️ **Takes ~2-3 minutes**
+
+### Step 4: Get the API Gateway URL
+
+After deployment succeeds, Terraform outputs the API URL:
+
+```bash
+terraform output api_gateway_url
+```
+
+Copy this URL - you'll need it for the next step.
+
+Example output:
+```
+https://abc123def.execute-api.us-east-1.amazonaws.com/prod
+```
+
+### Step 5: Configure the MCP Server
+
+Set the environment variable:
+
+```bash
+export CONNECT_API_BRIDGE_URL="https://abc123def.execute-api.us-east-1.amazonaws.com/prod"
+export CONNECT_API_BRIDGE_ENABLED="true"
+```
+
+Or add to your Hermes config (`~/.hermes/config.yaml`):
+
+```yaml
+mcp_servers:
+  amazon_connect:
+    command: "python"
+    args: ["-m", "amazon_connect_mcp"]
+    env:
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+      AWS_REGION: "us-east-1"
+      CONNECT_API_BRIDGE_URL: "https://abc123def.execute-api.us-east-1.amazonaws.com/prod"
+      CONNECT_API_BRIDGE_ENABLED: "true"
+```
+
+### Step 6: Test the Bridge
+
+Verify it's working:
+
+```bash
+curl $CONNECT_API_BRIDGE_URL/phone-numbers/list \
+  -H "Authorization: Bearer test" \
+  -H "x-amz-target: Connect.ListPhoneNumbers"
+```
+
+Expected: Returns a JSON response (even if empty)
+
+### Cleanup (When Needed)
+
+To delete all AWS resources created by Terraform:
+
+```bash
+terraform destroy -auto-approve
+```
+
+---
 
 ## Configuration
 
@@ -179,112 +291,16 @@ The following permissions are required:
 }
 ```
 
-## Quick Start
-
-### Configure MCP Client
-
-Add to your MCP client configuration (e.g., Claude Desktop, Hermes):
-
-```json
-{
-  "mcpServers": {
-    "amazon-connect": {
-      "command": "python",
-      "args": ["-m", "amazon_connect_mcp"],
-      "env": {
-        "AWS_REGION": "us-east-1",
-        "AWS_PROFILE": "default",
-        "CONNECT_INSTANCE_ID": "your-instance-id",
-        "CONNECT_API_BRIDGE_URL": "https://your-api-gateway.execute-api.region.amazonaws.com/prod"
-      }
-    }
-  }
-}
-```
-
 ### Running the Server
 
-**Stdio mode** (for MCP clients):
+**Stdio mode** (for MCP clients like Hermes):
 ```bash
 python -m amazon_connect_mcp
 ```
 
-**Direct execution**:
+Or on macOS:
 ```bash
-python src/amazon_connect_mcp/server.py
-```
-
-### Verify Installation
-
-```python
-# Get server info
-get_server_info()
-
-# List contact flows
-contact_flows_list(instance_id="your-instance-id")
-```
-
-## Usage Examples
-
-### List Contact Flows
-
-```python
-await mcp.call_tool("contact_flows_list", {
-    "instance_id": "your-instance-id",
-    "max_results": 50
-})
-```
-
-### Create Outbound Flow (Simple)
-
-```python
-await mcp.call_tool("contact_flows_create_outbound", {
-    "instance_id": "your-instance-id",
-    "name": "Appointment Reminder",
-    "mode": "PLAY_PROMPT",
-    "parameters": {
-        "prompt_text": "Hello! This is a reminder of your appointment tomorrow at 2 PM.",
-        "campaign_id": "appointment-campaign-001"
-    }
-})
-```
-
-### Create Outbound Flow (Interactive)
-
-```python
-await mcp.call_tool("contact_flows_create_outbound", {
-    "instance_id": "your-instance-id",
-    "name": "Smart Survey Flow",
-    "mode": "AI_AGENT",
-    "parameters": {
-        "greeting_message": "Hello from our customer service team!",
-        "confirmation_question": "Have you received your order?",
-        "confirmation_reply": "Great! Thank you for confirming.",
-        "lex_bot_arn": "arn:aws:lex:us-east-1:123456789:bot/survey-bot",
-        "lambda_arn": "arn:aws:lambda:us-east-1:123456789:function:process-survey",
-        "wait_timeout": 10
-    }
-})
-```
-
-### Search for Phone Numbers
-
-```python
-await mcp.call_tool("connect_phone_numbers_search", {
-    "phone_number_country_code": "US",
-    "phone_number_type": "TOLL_FREE",
-    "max_results": 10
-})
-```
-
-### Claim a Phone Number
-
-```python
-await mcp.call_tool("connect_phone_numbers_claim", {
-    "instance_id": "your-instance-id",
-    "phone_number": "+1-800-555-0123",
-    "description": "Main customer service line"
-})
+python3 -m amazon_connect_mcp
 ```
 
 ## Tool Inventory
@@ -346,87 +362,145 @@ await mcp.call_tool("connect_phone_numbers_claim", {
 - `connect_prompts_create`
 - `connect_prompts_delete`
 
+### API Bridge Tools (19)
+
+See [LAMBDA_BRIDGE_SPEC.md](docs/LAMBDA_BRIDGE_SPEC.md) for full documentation.
+
+---
+
+## Usage Examples
+
+### List Contact Flows
+
+```python
+await mcp.call_tool("contact_flows_list", {
+    "instance_id": "your-instance-id",
+    "max_results": 50
+})
+```
+
+### Create Outbound Flow (Simple)
+
+```python
+await mcp.call_tool("contact_flows_create_outbound", {
+    "instance_id": "your-instance-id",
+    "name": "Appointment Reminder",
+    "mode": "PLAY_PROMPT",
+    "parameters": {
+        "prompt_text": "Hello! This is a reminder of your appointment tomorrow at 2 PM.",
+        "campaign_id": "appointment-campaign-001"
+    }
+})
+```
+
+### Create Outbound Flow (Interactive)
+
+```python
+await mcp.call_tool("contact_flows_create_outbound", {
+    "instance_id": "your-instance-id",
+    "name": "Smart Survey Flow",
+    "mode": "AI_AGENT",
+    "parameters": {
+        "greeting_message": "Hello from our customer service team!",
+        "confirmation_question": "Have you received your order?",
+        "confirmation_reply": "Great! Thank you for confirming.",
+        "lex_bot_arn": "arn:aws:lex:us-east-1:123456789:bot/survey-bot",
+        "lambda_arn": "arn:aws:lambda:us-east-1:123456789:function:process-survey",
+        "wait_timeout": 10
+    }
+})
+```
+
+### Search for Phone Numbers (Requires Lambda Bridge)
+
+```python
+await mcp.call_tool("connect_phone_numbers_search", {
+    "phone_number_country_code": "US",
+    "phone_number_type": "TOLL_FREE",
+    "max_results": 10
+})
+```
+
+### Claim a Phone Number (Requires Lambda Bridge)
+
+```python
+await mcp.call_tool("connect_phone_numbers_claim", {
+    "instance_id": "your-instance-id",
+    "phone_number": "+1-800-555-0123",
+    "description": "Main customer service line"
+})
+```
+
+---
+
 ## Security Considerations
 
-### Data Protection
+### AWS Credential Handling
 
-- **No credential storage**: AWS credentials are not stored by the MCP server
-- **Environment isolation**: Each tool call operates within its own context
-- **No logging of sensitive data**: API keys and tokens are not logged
+- No AWS credentials are stored within the MCP server
+- Credentials are obtained from standard AWS credential providers
+- Environment variables or IAM roles are used for authentication
 
-### Access Control
+### Data Handling
 
-- Follow principle of least privilege when creating IAM policies
-- Use separate AWS profiles for different environments
-- Enable CloudTrail logging for audit purposes
+- The MCP server does not persist Connect configuration data
+- All API calls are executed in real-time against AWS APIs
+- No sensitive data is logged (credentials redacted from logs)
 
-### Network Security
+### Lambda Bridge
 
-- When using API Bridge, ensure API Gateway uses TLS 1.2+
-- Configure appropriate CORS settings for API Gateway
-- Use VPC endpoints for AWS service access when possible
+- IAM role with minimal required permissions
+- API Gateway can be configured with API keys or IAM auth
+- No credentials stored in Lambda function code
+
+---
 
 ## Troubleshooting
 
-### Common Issues
+### Installation Issues
 
-**Issue**: `AWS credentials not found`
+**macOS: uv refuses to install globally**
+- Create and activate a virtual environment: `uv venv && source .venv/bin/activate`
+- Then install: `uv pip install -e ".[dev]"`
 
-**Solution**: Ensure AWS credentials are configured:
-```bash
-export AWS_ACCESS_KEY_ID=your-key
-export AWS_SECRET_ACCESS_KEY=your-secret
-export AWS_REGION=us-east-1
-```
+**Python3 not found**
+- On macOS, use `python3` instead of `python`
+- Ensure Python 3.11+ is installed: `python3 --version`
 
-**Issue**: `Template not found`
+### Runtime Issues
 
-**Solution**: Set TEMPLATES_DIR environment variable:
-```bash
-export TEMPLATES_DIR=/path/to/templates
-```
+**"No Connect instance found"**
+- Set `CONNECT_INSTANCE_ID` environment variable
+- Or pass `instance_id` parameter to each tool call
 
-**Issue**: `API Bridge not configured`
+**"Missing credentials"**
+- Check AWS CLI is configured: `aws configure list`
+- Verify environment variables are set
+- For Lambda tools, ensure `CONNECT_API_BRIDGE_URL` is set
 
-**Solution**: For Lambda-backed features, set:
-```bash
-export CONNECT_API_BRIDGE_URL=https://your-api.execute-api.region.amazonaws.com/prod
-export CONNECT_API_BRIDGE_ENABLED=true
-```
+**"API Bridge not responding"**
+- Verify the Lambda bridge is deployed
+- Check `terraform output api_gateway_url`
+- Ensure `CONNECT_API_BRIDGE_ENABLED=true`
 
-### Debug Mode
-
-Enable verbose logging:
-```bash
-export MCP_LOG_LEVEL=debug
-python -m amazon_connect_mcp
-```
-
-### Checking Tool Availability
-
-```python
-# Get all available tools
-await mcp.call_tool("get_server_info")
-```
+---
 
 ## Development
 
-### Setup Development Environment
-
 ```bash
-# Clone repository
+# Clone the repository
 git clone https://github.com/timmy-t-bot/amazon-connect-mcp.git
 cd amazon-connect-mcp
 
 # Install with dev dependencies
-uv pip install -e ".[dev,test]"
+uv pip install -e ".[dev]"
 
 # Run tests
-pytest
+pytest tests/ -v
 
 # Run linting
-ruff check .
-ruff format .
+ruff check src
+black src
 
 # Run type checking
 mypy src
@@ -442,17 +516,7 @@ amazon-connect-mcp/
 │   │   ├── config.py             # Configuration management
 │   │   ├── connect_api_bridge.py # Lambda bridge tools
 │   │   ├── components/           # Infrastructure components
-│   │   │   ├── hours_of_operation.py
-│   │   │   ├── instance_manager.py
-│   │   │   ├── phone_numbers.py
-│   │   │   ├── prompts.py
-│   │   │   ├── queues.py
-│   │   │   └── integration.py
 │   │   └── templates/            # Contact flow templates
-│   │       ├── outbound/
-│   │       ├── inbound/
-│   │       ├── engine.py
-│   │       └── registry.py
 │   └── contact_flows/            # Contact flow tools
 │       └── contact_flow_tools.py
 ├── lambda/                       # Lambda functions
@@ -473,17 +537,7 @@ amazon-connect-mcp/
     └── lambda_deployment.md
 ```
 
-## API Bridge Setup
-
-For APIs requiring the Lambda bridge:
-
-```bash
-cd terraform
-terraform init
-terraform apply -var="aws_region=us-east-1"
-```
-
-See [terraform/README.md](terraform/README.md) and [lambda_deployment.md](examples/lambda_deployment.md) for detailed setup instructions.
+---
 
 ## Architecture
 
@@ -508,6 +562,8 @@ See [terraform/README.md](terraform/README.md) and [lambda_deployment.md](exampl
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture documentation.
+
+---
 
 ## Contributing
 
