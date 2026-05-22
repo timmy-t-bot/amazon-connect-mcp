@@ -69,7 +69,7 @@ pip install amazon-connect-mcp
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone and install
-git clone https://github.com/nousresearch/amazon-connect-mcp.git
+git clone https://github.com/timmy-t-bot/amazon-connect-mcp.git
 cd amazon-connect-mcp
 uv pip install -e ".[dev]"
 ```
