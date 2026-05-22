@@ -74,6 +74,40 @@ cd amazon-connect-mcp
 uv pip install -e ".[dev]"
 ```
 
+#### macOS Troubleshooting
+
+If you encounter errors on macOS (e.g., `uv pip install` refusing to install globally), follow these steps:
+
+**1. Create and Activate the Virtual Environment**
+
+Since you are using `uv`, we can let `uv` handle the virtual environment creation—it's much faster.
+
+Create the environment:
+```bash
+uv venv
+```
+
+Now activate it so your terminal knows to use it:
+```bash
+source .venv/bin/activate
+```
+
+> 💡 You should see `(.venv)` appear at the beginning of your terminal prompt, indicating it's active.
+
+**2. Install the Package**
+
+Now that the virtual environment is active, run the install command again:
+```bash
+uv pip install -e ".[dev]"
+```
+
+**3. Run the MCP Server**
+
+Once that finishes successfully, start the module. Because your Mac defaults to `python3`, use:
+```bash
+python3 -m amazon_connect_mcp
+```
+
 ## Configuration
 
 ### Environment Variables
