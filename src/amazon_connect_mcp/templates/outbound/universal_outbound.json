@@ -1,0 +1,227 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "StoreIncomingAttributes",
+  "Actions": [
+    {
+      "Identifier": "StoreIncomingAttributes",
+      "Type": "UpdateContactAttributes",
+      "Parameters": {
+        "Attributes": {
+          "message": "$.Attributes.message",
+          "mode": "$.Attributes.mode",
+          "queue_arn": "$.Attributes.queue_arn",
+          "lex_bot_arn": "$.Attributes.lex_bot_arn",
+          "bedrock_agent_id": "$.Attributes.bedrock_agent_id",
+          "bedrock_agent_alias_id": "$.Attributes.bedrock_agent_alias_id",
+          "fallback_queue_arn": "$.Attributes.fallback_queue_arn",
+          "call_reference": "$.Attributes.call_reference",
+          "campaign_id": "$.Attributes.campaign_id"
+        }
+      },
+      "Transitions": {
+        "NextAction": "PlayMessage"
+      }
+    },
+    {
+      "Identifier": "PlayMessage",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{message_text}}",
+        "SSML": "{{message_ssml}}"
+      },
+      "Transitions": {
+        "NextAction": "RouteByMode"
+      }
+    },
+    {
+      "Identifier": "RouteByMode",
+      "Type": "CheckContactAttributes",
+      "Parameters": {
+        "Attributes": [
+          {
+            "Attribute": "mode",
+            "Comparison": "Equals",
+            "Value": "interactive",
+            "NextAction": "CheckInteractive"
+          }
+        ]
+      },
+      "Transitions": {
+        "NextAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "CheckInteractive",
+      "Type": "GetUserInput",
+      "Parameters": {
+        "Text": "Press 1 to confirm, press 2 to decline, or stay on the line to speak with an agent.",
+        "DTMF": {
+          "DTMFInputTimeout": "{{dtmf_timeout}}",
+          "DTMFInputRetryCount": "{{dtmf_retry_count}}"
+        }
+      },
+      "Transitions": {
+        "NextAction": "RouteByDTMF",
+        "ErrorAction": "TransferToFallback"
+      }
+    },
+    {
+      "Identifier": "RouteByDTMF",
+      "Type": "CheckContactAttributes",
+      "Parameters": {
+        "Attributes": [
+          {
+            "Attribute": "DTMFResult",
+            "Comparison": "Equals",
+            "Value": "1",
+            "NextAction": "ConfirmAndDisconnect"
+          },
+          {
+            "Attribute": "DTMFResult",
+            "Comparison": "Equals",
+            "Value": "2",
+            "NextAction": "DeclineAndDisconnect"
+          }
+        ]
+      },
+      "Transitions": {
+        "NextAction": "TransferToFallback"
+      }
+    },
+    {
+      "Identifier": "ConfirmAndDisconnect",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{confirm_message}}"
+      },
+      "Transitions": {
+        "NextAction": "SetDispositionConfirmed"
+      }
+    },
+    {
+      "Identifier": "DeclineAndDisconnect",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "{{decline_message}}"
+      },
+      "Transitions": {
+        "NextAction": "SetDispositionDeclined"
+      }
+    },
+    {
+      "Identifier": "SetDispositionConfirmed",
+      "Type": "UpdateContactAttributes",
+      "Parameters": {
+        "Attributes": {
+          "disposition": "CONFIRMED",
+          "call_result": "SUCCESS",
+          "flow_type": "UNIVERSAL_OUTBOUND"
+        }
+      },
+      "Transitions": {
+        "NextAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "SetDispositionDeclined",
+      "Type": "UpdateContactAttributes",
+      "Parameters": {
+        "Attributes": {
+          "disposition": "DECLINED",
+          "call_result": "SUCCESS",
+          "flow_type": "UNIVERSAL_OUTBOUND"
+        }
+      },
+      "Transitions": {
+        "NextAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "TransferToFallback",
+      "Type": "TransferToQueue",
+      "Parameters": {
+        "QueueId": "{{fallback_queue_arn}}"
+      },
+      "Transitions": {
+        "NextAction": "Disconnect",
+        "ErrorAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "Disconnect",
+      "Type": "DisconnectParticipant",
+      "Parameters": {}
+    }
+  ],
+  "Variables": {
+    "message_text": {
+      "type": "string",
+      "required": true,
+      "description": "The TTS message to play to the caller. Populated from $.Attributes.message passed by the AI agent or API caller.",
+      "ssml_enabled": true
+    },
+    "message_ssml": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional SSML version of the message for enhanced speech synthesis."
+    },
+    "dtmf_timeout": {
+      "type": "string",
+      "default": "5",
+      "description": "Timeout in seconds for DTMF input collection."
+    },
+    "dtmf_retry_count": {
+      "type": "string",
+      "default": "2",
+      "description": "Number of times to retry DTMF input collection on no-input."
+    },
+    "confirm_message": {
+      "type": "string",
+      "required": false,
+      "default": "Thank you for confirming. Goodbye.",
+      "description": "Message to play when the user confirms (presses 1)."
+    },
+    "decline_message": {
+      "type": "string",
+      "required": false,
+      "default": "Thank you. We will follow up if needed. Goodbye.",
+      "description": "Message to play when the user declines (presses 2)."
+    },
+    "fallback_queue_arn": {
+      "type": "arn",
+      "required": true,
+      "description": "ARN of the queue to transfer to if the user needs human assistance or AI escalation is required."
+    },
+    "lex_bot_arn": {
+      "type": "arn",
+      "required": false,
+      "default": "arn:aws:lex:us-east-1:000000000000:bot-alias/dummy/TSTALIASID",
+      "description": "Optional Lex V2 bot alias ARN for natural language understanding in interactive mode."
+    },
+    "bedrock_agent_id": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional Bedrock Agent ID for AI-powered conversation routing."
+    },
+    "bedrock_agent_alias_id": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional Bedrock Agent Alias ID."
+    },
+    "campaign_id": {
+      "type": "string",
+      "required": false,
+      "default": "universal_outbound",
+      "description": "Campaign identifier for tracking and analytics."
+    },
+    "call_reference": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "External reference ID for correlating this call with an external system."
+    }
+  }
+}

@@ -58,6 +58,23 @@ from .prompts import (
     connect_prompts_delete,
 )
 
+from .outbound import (
+    connect_start_outbound_voice_contact,
+    connect_stop_contact,
+    connect_describe_contact,
+    connect_update_contact_attributes,
+)
+
+from .routing_profiles import (
+    connect_routing_profiles_list,
+    connect_routing_profiles_describe,
+)
+
+from .users import (
+    connect_users_list,
+    connect_users_describe,
+)
+
 # List of all component tools for registration
 ALL_COMPONENT_TOOLS = [
     # Instances
@@ -93,6 +110,17 @@ ALL_COMPONENT_TOOLS = [
     connect_prompts_describe,
     connect_prompts_create,
     connect_prompts_delete,
+    # Outbound Communication
+    connect_start_outbound_voice_contact,
+    connect_stop_contact,
+    connect_describe_contact,
+    connect_update_contact_attributes,
+    # Routing Profiles
+    connect_routing_profiles_list,
+    connect_routing_profiles_describe,
+    # Users
+    connect_users_list,
+    connect_users_describe,
 ]
 
 
@@ -184,5 +212,19 @@ def get_component_tools_by_category() -> dict:
             connect_prompts_describe,
             connect_prompts_create,
             connect_prompts_delete,
+        ],
+        "outbound": [
+            connect_start_outbound_voice_contact,
+            connect_stop_contact,
+            connect_describe_contact,
+            connect_update_contact_attributes,
+        ],
+        "routing_profiles": [
+            connect_routing_profiles_list,
+            connect_routing_profiles_describe,
+        ],
+        "users": [
+            connect_users_list,
+            connect_users_describe,
         ],
     }

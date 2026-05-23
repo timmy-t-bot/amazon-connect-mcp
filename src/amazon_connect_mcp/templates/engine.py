@@ -55,8 +55,9 @@ class TemplateVariable:
         elif self.var_type == "arn":
             if not isinstance(value, str):
                 raise ValueError(f"Variable '{self.name}' must be an ARN string")
-            if not value.startswith("arn:"):
+            if value and not value.startswith("arn:"):
                 raise ValueError(f"Variable '{self.name}' must be a valid ARN")
+            # Allow empty string for optional ARN fields
         elif self.var_type == "enum":
             if self.allowed_values and str(value) not in self.allowed_values:
                 raise ValueError(
@@ -115,25 +116,27 @@ class TemplateEngine:
         # with dummy values that won't break JSON parsing
         temp_content = raw_content
         for placeholder in placeholders:
-            # The placeholder pattern is {{variable_name}}
             placeholder_pattern_str = '{{' + placeholder + '}}'
-            
+
             # Use type-specific defaults based on common variable naming
             if 'timeout' in placeholder.lower() or 'wait' in placeholder.lower():
                 temp_content = temp_content.replace(placeholder_pattern_str, '0')
             elif 'arn' in placeholder.lower():
+                # Remove quotes since they exist in surrounding JSON
                 temp_content = temp_content.replace(
-                    placeholder_pattern_str, 
-                    '"arn:aws:temp:placeholder"'
+                    placeholder_pattern_str,
+                    'arn:aws:temp:placeholder'
                 )
             elif 'boolean' in placeholder.lower() or 'enabled' in placeholder.lower() or \
-                 'needed' in placeholder.lower() or placeholder == 'callback_needed':
+                 'needed' in placeholder.lower() or placeholder == 'callback_needed' or \
+                 placeholder == 'ai_resolved':
                 temp_content = temp_content.replace(placeholder_pattern_str, 'false')
             elif placeholder in ['min', 'max']:  # Integer values
                 temp_content = temp_content.replace(placeholder_pattern_str, '1')
             else:
-                # Default to empty string for text variables 
-                temp_content = temp_content.replace(placeholder_pattern_str, '""')
+                # Use a valid JSON string value that won't break parsing
+                # Must NOT use "" inside a JSON string context (creates """ triple quotes)
+                temp_content = temp_content.replace(placeholder_pattern_str, 'PLACEHOLDER_VALUE')
         
         # Parse the JSON with placeholders replaced
         template = json.loads(temp_content)
@@ -247,11 +250,24 @@ class TemplateEngine:
         # Validate parameters first
         validated_params = self.validate_parameters(template_name, parameters)
         
-        # Load and render template
-        template = self.load_template(template_name)
-        rendered = self.render_recursive(template, validated_params)
+        # Load raw template JSON so we can substitute real values
+        # First resolve the template path (same logic as load_template for subdirs)
+        template_path = self.templates_dir / f"{template_name}.json"
+        if not template_path.exists():
+            for subdir in ("outbound", "inbound", "shared"):
+                alt = self.templates_dir / subdir / f"{template_name}.json"
+                if alt.exists():
+                    template_path = alt
+                    break
+        if not template_path.exists():
+            raise FileNotFoundError(f"Template '{template_name}' not found at {template_path}")
+        raw_content = template_path.read_text()
         
-        return rendered
+        # Render: substitute all {{variables}} with validated parameter values
+        rendered_json = self.render_string(raw_content, validated_params)
+        
+        # Parse the rendered JSON
+        return json.loads(rendered_json)
     
     def get_template_info(self, template_name: str) -> Dict:
         """Get template metadata and variable information."""

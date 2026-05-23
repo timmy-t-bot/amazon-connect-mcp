@@ -6,6 +6,9 @@ This module provides MCP tools for managing Amazon Connect infrastructure compon
 - Queues (create, update, delete, describe, list)
 - Hours of Operation (create, update, delete, describe, list, overrides)
 - Prompts (create, delete, describe, list)
+- Outbound Communication (start calls, stop, describe, update attributes)
+- Routing Profiles (list, describe)
+- Users (list, describe)
 
 Usage:
     from amazon_connect_mcp.components import (
@@ -15,6 +18,9 @@ Usage:
         connect_queues_create,
         connect_hours_of_operations_create,
         connect_prompts_create,
+        connect_start_outbound_voice_contact,
+        connect_routing_profiles_list,
+        connect_users_list,
     )
 """
 
@@ -61,6 +67,23 @@ from .prompts import (
     connect_prompts_delete,
 )
 
+from .outbound import (
+    connect_start_outbound_voice_contact,
+    connect_stop_contact,
+    connect_describe_contact,
+    connect_update_contact_attributes,
+)
+
+from .routing_profiles import (
+    connect_routing_profiles_list,
+    connect_routing_profiles_describe,
+)
+
+from .users import (
+    connect_users_list,
+    connect_users_describe,
+)
+
 __all__ = [
     # Instances
     "connect_instances_list",
@@ -95,4 +118,15 @@ __all__ = [
     "connect_prompts_describe",
     "connect_prompts_create",
     "connect_prompts_delete",
+    # Outbound Communication
+    "connect_start_outbound_voice_contact",
+    "connect_stop_contact",
+    "connect_describe_contact",
+    "connect_update_contact_attributes",
+    # Routing Profiles
+    "connect_routing_profiles_list",
+    "connect_routing_profiles_describe",
+    # Users
+    "connect_users_list",
+    "connect_users_describe",
 ]

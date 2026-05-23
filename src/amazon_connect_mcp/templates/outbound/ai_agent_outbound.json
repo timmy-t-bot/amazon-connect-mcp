@@ -10,22 +10,46 @@
         "SSML": "{{greeting_ssml}}"
       },
       "Transitions": {
-        "NextAction": "WaitForResponse"
+        "NextAction": "RouteAIProvider"
       }
     },
     {
-      "Identifier": "WaitForResponse",
-      "Type": "Wait",
+      "Identifier": "RouteAIProvider",
+      "Type": "CheckAttribute",
       "Parameters": {
-        "TimeoutSeconds": {{wait_timeout}}
+        "Attributes": [
+          {
+            "Attribute": "bedrock_agent_id",
+            "Comparison": "Exists",
+            "NextAction": "InvokeBedrockAgent"
+          },
+          {
+            "Attribute": "lex_bot_arn",
+            "Comparison": "Exists",
+            "NextAction": "CheckIntentLex"
+          }
+        ]
       },
       "Transitions": {
-        "TimeoutAction": "Disconnect",
-        "NextAction": "CheckIntent"
+        "NextAction": "TransferToHuman"
       }
     },
     {
-      "Identifier": "CheckIntent",
+      "Identifier": "InvokeBedrockAgent",
+      "Type": "InvokeBedrockAgent",
+      "Parameters": {
+        "AgentId": "{{bedrock_agent_id}}",
+        "AgentAliasId": "{{bedrock_agent_alias_id}}",
+        "InputText": "{{greeting_message}}",
+        "EnableTrace": false
+      },
+      "Transitions": {
+        "NextAction": "PlayAIResponse",
+        "ErrorAction": "TransferToHuman"
+      }
+    },
+    {
+      "Identifier": "CheckIntentLex",
       "Type": "GetUserInput",
       "Parameters": {
         "Text": "{{confirmation_question}}",
@@ -34,18 +58,45 @@
         }
       },
       "Transitions": {
-        "NextAction": "ProcessIntent"
+        "NextAction": "ProcessLexIntent",
+        "ErrorAction": "TransferToHuman"
       }
     },
     {
-      "Identifier": "ProcessIntent",
+      "Identifier": "ProcessLexIntent",
       "Type": "InvokeLambdaFunction",
       "Parameters": {
         "LambdaFunctionARN": "{{lambda_arn}}",
-        "InvocationTimeLimitSeconds": 8
+        "InvocationTimeLimitSeconds": "{{lambda_timeout}}"
       },
       "Transitions": {
-        "NextAction": "PlayConfirmation"
+        "NextAction": "PlayConfirmation",
+        "ErrorAction": "TransferToHuman"
+      }
+    },
+    {
+      "Identifier": "PlayAIResponse",
+      "Type": "MessageParticipant",
+      "Parameters": {
+        "Text": "$.External.BedrockAgentResults"
+      },
+      "Transitions": {
+        "NextAction": "SetAIResolutionAttributes"
+      }
+    },
+    {
+      "Identifier": "SetAIResolutionAttributes",
+      "Type": "UpdateContactAttributes",
+      "Parameters": {
+        "Attributes": {
+          "ai_resolved": "true",
+          "ai_provider": "bedrock_agent",
+          "call_result": "{{call_result}}",
+          "flow_type": "AI_AGENT_BEDROCK"
+        }
+      },
+      "Transitions": {
+        "NextAction": "Disconnect"
       }
     },
     {
@@ -55,17 +106,60 @@
         "Text": "{{confirmation_reply}}"
       },
       "Transitions": {
-        "NextAction": "SetAttributes"
+        "NextAction": "SetLexAttributes"
       }
     },
     {
-      "Identifier": "SetAttributes",
+      "Identifier": "SetLexAttributes",
       "Type": "UpdateContactAttributes",
       "Parameters": {
         "Attributes": {
           "call_result": "{{call_result}}",
           "callback_requested": "{{callback_needed}}",
-          "flow_type": "AI_AGENT"
+          "flow_type": "AI_AGENT_LEX",
+          "ai_resolved": "{{ai_resolved}}"
+        }
+      },
+      "Transitions": {
+        "NextAction": "CheckResolved"
+      }
+    },
+    {
+      "Identifier": "CheckResolved",
+      "Type": "CheckAttribute",
+      "Parameters": {
+        "Attributes": [
+          {
+            "Attribute": "ai_resolved",
+            "Comparison": "Equals",
+            "Value": "true",
+            "NextAction": "Disconnect"
+          }
+        ]
+      },
+      "Transitions": {
+        "NextAction": "TransferToHuman"
+      }
+    },
+    {
+      "Identifier": "TransferToHuman",
+      "Type": "TransferToQueue",
+      "Parameters": {
+        "QueueId": "{{fallback_queue_arn}}"
+      },
+      "Transitions": {
+        "NextAction": "SetTransferAttributes",
+        "ErrorAction": "Disconnect"
+      }
+    },
+    {
+      "Identifier": "SetTransferAttributes",
+      "Type": "UpdateContactAttributes",
+      "Parameters": {
+        "Attributes": {
+          "transferred_to_human": "true",
+          "transfer_reason": "ai_unresolved",
+          "flow_type": "AI_AGENT_FALLBACK"
         }
       },
       "Transitions": {
@@ -82,7 +176,7 @@
     "greeting_message": {
       "type": "string",
       "required": true,
-      "description": "Message to play when call connects",
+      "description": "Message to play when call connects. Also used as initial prompt for Bedrock Agent.",
       "ssml_enabled": true
     },
     "greeting_ssml": {
@@ -91,43 +185,70 @@
       "default": "",
       "description": "SSML version of greeting for better TTS"
     },
-    "wait_timeout": {
-      "type": "integer",
-      "default": 5,
-      "min": 1,
-      "max": 30,
-      "description": "Seconds to wait for user response"
-    },
     "confirmation_question": {
       "type": "string",
-      "required": true,
-      "description": "Question to ask user for confirmation"
+      "required": false,
+      "default": "",
+      "description": "Question to ask user via Lex bot for intent recognition. Only used when lex_bot_arn is provided."
     },
     "confirmation_reply": {
       "type": "string",
-      "required": true,
-      "description": "Response to user confirmation"
+      "required": false,
+      "default": "Thank you. Goodbye.",
+      "description": "Response to user after Lex intent processing."
     },
     "lex_bot_arn": {
       "type": "arn",
-      "required": true,
-      "description": "Lex bot ARN for intent recognition"
+      "required": false,
+      "default": "",
+      "description": "Lex V2 bot alias ARN for intent recognition. If both Lex and Bedrock are provided, Bedrock takes precedence."
+    },
+    "bedrock_agent_id": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Bedrock Agent ID. Takes precedence over Lex bot if both are provided."
+    },
+    "bedrock_agent_alias_id": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Bedrock Agent Alias ID. Required if bedrock_agent_id is set."
     },
     "lambda_arn": {
       "type": "arn",
-      "required": true,
-      "description": "Lambda function ARN for custom business logic"
+      "required": false,
+      "default": "arn:aws:lambda:us-east-1:000000000000:function:default-processor",
+      "description": "Lambda function ARN for processing Lex intents. Only required when using Lex mode."
+    },
+    "lambda_timeout": {
+      "type": "integer",
+      "default": 8,
+      "min": 3,
+      "max": 60,
+      "description": "Lambda invocation timeout in seconds."
+    },
+    "fallback_queue_arn": {
+      "type": "arn",
+      "required": false,
+      "default": "arn:aws:connect:us-east-1:000000000000:instance/test/queue/default",
+      "description": "Queue ARN for human transfer when AI cannot resolve the interaction."
     },
     "call_result": {
       "type": "enum",
-      "values": ["SUCCESS", "NO_ANSWER", "BUSY", "FAILED"],
+      "values": ["SUCCESS", "NO_ANSWER", "BUSY", "FAILED", "TRANSFERRED"],
       "default": "SUCCESS",
-      "description": "Result status of the call"
+      "description": "Result status of the call."
     },
     "callback_needed": {
       "type": "boolean",
       "default": false,
-      "description": "Whether a callback was requested"
+      "description": "Whether a callback was requested by the customer."
+    },
+    "ai_resolved": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the AI (Lex or Bedrock) successfully resolved the interaction. If false, transfers to human."
     }
   }
 }

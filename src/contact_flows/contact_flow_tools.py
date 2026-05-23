@@ -6,8 +6,17 @@ from typing import Any, Dict, List, Optional
 from mcp.server.fastmcp import FastMCP
 from mcp.types import TextContent
 
-from ..templates.engine import TemplateEngine
-from ..templates.registry import TemplateRegistry
+try:
+    # When installed as package
+    from amazon_connect_mcp.templates.engine import TemplateEngine
+    from amazon_connect_mcp.templates.registry import TemplateRegistry
+except ImportError:
+    # When running from source tree
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from amazon_connect_mcp.templates.engine import TemplateEngine
+    from amazon_connect_mcp.templates.registry import TemplateRegistry
 
 # Initialize MCP server
 mcp = FastMCP("amazon_connect_contact_flows")
@@ -186,14 +195,15 @@ def contact_flows_create_outbound(
 ) -> Dict[str, Any]:
     """Create an outbound contact flow using a template.
     
-    Supports two modes:
+    Supports three modes:
     - PLAY_PROMPT: Static TTS message (no interaction)
     - AI_AGENT: Interactive flow with Lex/Lambda integration
+    - UNIVERSAL_OUTBOUND: Master outbound flow accepting Attributes, with optional interactive mode
     
     Args:
         instance_id: The ID of the Connect instance
         name: Name for the contact flow
-        mode: Mode of operation - "PLAY_PROMPT" or "AI_AGENT"
+        mode: Mode of operation - "PLAY_PROMPT", "AI_AGENT", or "UNIVERSAL_OUTBOUND"
         parameters: Template parameters for the flow
             For PLAY_PROMPT mode:
                 - prompt_text (required): TTS message to play
@@ -205,6 +215,16 @@ def contact_flows_create_outbound(
                 - lex_bot_arn (required): Lex bot ARN
                 - lambda_arn (required): Lambda function ARN
                 - (see ai_agent_outbound.json template for full list)
+            For UNIVERSAL_OUTBOUND mode:
+                - message_text (required): TTS message to play
+                - mode_router (required): "CheckInteractive" or "Disconnect"
+                - fallback_queue_arn (required): Queue ARN for fallback transfer
+                - lex_bot_arn (optional): Lex bot ARN
+                - bedrock_agent_id (optional): Bedrock Agent ID
+                - dtmf_timeout (optional, default 5): DTMF timeout seconds
+                - confirm_message (optional): Message for confirmation
+                - decline_message (optional): Message for decline
+                - campaign_id (optional): Campaign identifier
         description: Optional description for the flow
         tags: Optional tags for the contact flow
         
@@ -215,7 +235,8 @@ def contact_flows_create_outbound(
         # Select template based on mode
         template_map = {
             "PLAY_PROMPT": "play_prompt_outbound",
-            "AI_AGENT": "ai_agent_outbound"
+            "AI_AGENT": "ai_agent_outbound",
+            "UNIVERSAL_OUTBOUND": "universal_outbound"
         }
         
         if mode.upper() not in template_map:
@@ -268,6 +289,142 @@ def contact_flows_create_outbound(
             "mode": mode,
             "template_used": template_name,
             "validated_parameters": validated_params
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+
+@mcp.tool()
+def contact_flows_create_universal_outbound(
+    instance_id: str,
+    flow_name: str,
+    message_text: str,
+    mode: str = "play_only",
+    fallback_queue_arn: str = "arn:aws:connect:us-east-1:000000000000:instance/test/queue/default",
+    lex_bot_arn: str = "",
+    bedrock_agent_id: str = "",
+    bedrock_agent_alias_id: str = "",
+    campaign_id: str = "universal_outbound",
+    confirm_message: str = "Thank you for confirming. Goodbye.",
+    decline_message: str = "Thank you. We will follow up if needed. Goodbye.",
+    dtmf_timeout: int = 5,
+    dtmf_retry_count: int = 2,
+    message_ssml: str = "",
+    description: str = "",
+    tags: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """Create a universal outbound contact flow with AI agent integration support.
+    
+    This is the master outbound flow that accepts an Attributes dictionary from
+    AI agents or API callers and routes based on mode (play_only or interactive).
+    
+    Args:
+        instance_id: The ID of the Connect instance
+        flow_name: Name for the contact flow
+        message_text: The TTS message to play to the caller
+        mode: Flow mode - "play_only" (just play message) or "interactive" (DTMF input with transfer)
+        fallback_queue_arn: Queue ARN for transfer when user needs human agent
+        lex_bot_arn: Optional Lex V2 bot alias ARN for NLP interactions
+        bedrock_agent_id: Optional Bedrock Agent ID for AI-powered routing
+        bedrock_agent_alias_id: Optional Bedrock Agent Alias ID
+        campaign_id: Campaign identifier for tracking
+        confirm_message: Message played when user confirms (DTMF 1)
+        decline_message: Message played when user declines (DTMF 2)
+        dtmf_timeout: Timeout in seconds for DTMF input (1-30)
+        dtmf_retry_count: Number of DTMF retry attempts (1-5)
+        message_ssml: Optional SSML version of the message
+        description: Optional description for the flow
+        tags: Optional tags for the contact flow
+        
+    Returns:
+        Dictionary containing the created contact flow ID, ARN, and attributes config
+    """
+    try:
+        # Build the parameters matching the universal_outbound template
+        parameters = {
+            "message_text": message_text,
+            "message_ssml": message_ssml,
+            "fallback_queue_arn": fallback_queue_arn,
+            "lex_bot_arn": lex_bot_arn,
+            "bedrock_agent_id": bedrock_agent_id,
+            "bedrock_agent_alias_id": bedrock_agent_alias_id,
+            "campaign_id": campaign_id,
+            "confirm_message": confirm_message,
+            "decline_message": decline_message,
+            "dtmf_timeout": str(dtmf_timeout),
+            "dtmf_retry_count": str(dtmf_retry_count)
+        }
+        
+        # Validate and render template
+        try:
+            validated_params = template_engine.validate_parameters(
+                "universal_outbound",
+                parameters
+            )
+            rendered_content = template_engine.render("universal_outbound", validated_params)
+        except ValueError as ve:
+            return {
+                "status": "error",
+                "error": f"Parameter validation failed: {str(ve)}"
+            }
+        
+        flow_type = "OUTBOUND_WHISPER_FLOW"
+        
+        params = {
+            "InstanceId": instance_id,
+            "Name": flow_name,
+            "Type": flow_type,
+            "Content": json.dumps(rendered_content)
+        }
+        
+        if description:
+            params["Description"] = description
+        else:
+            params["Description"] = f"Universal outbound flow ({mode}) created via MCP"
+        
+        if tags:
+            params["Tags"] = tags
+        
+        response = connect_client.create_contact_flow(**params)
+        
+        # Build the attributes template that AI agents will pass
+        attributes_config = {
+            "input_attributes": {
+                "message": {"type": "string", "required": True, "description": "Message to play"},
+                "mode": {"type": "string", "required": True, "enum": ["play_only", "interactive"], "description": "Flow mode"},
+                "queue_arn": {"type": "string", "required": False, "description": "Queue ARN for override"},
+                "lex_bot_arn": {"type": "string", "required": False, "description": "Lex bot ARN"},
+                "bedrock_agent_id": {"type": "string", "required": False, "description": "Bedrock Agent ID"},
+                "bedrock_agent_alias_id": {"type": "string", "required": False, "description": "Bedrock Agent Alias ID"},
+                "fallback_queue_arn": {"type": "string", "required": False, "description": "Fallback queue ARN"},
+                "call_reference": {"type": "string", "required": False, "description": "External reference ID"},
+                "campaign_id": {"type": "string", "required": False, "description": "Campaign identifier"}
+            },
+            "example_attributes_payload": {
+                "message": message_text,
+                "mode": mode,
+                "fallback_queue_arn": fallback_queue_arn,
+                "lex_bot_arn": lex_bot_arn,
+                "bedrock_agent_id": bedrock_agent_id,
+                "bedrock_agent_alias_id": bedrock_agent_alias_id,
+                "campaign_id": campaign_id,
+                "call_reference": ""
+            }
+        }
+        
+        return {
+            "status": "success",
+            "contact_flow_id": response["ContactFlowId"],
+            "contact_flow_arn": response["ContactFlowArn"],
+            "name": flow_name,
+            "type": flow_type,
+            "mode": mode,
+            "template_used": "universal_outbound",
+            "validated_parameters": validated_params,
+            "attributes_config": attributes_config
         }
     except Exception as e:
         return {

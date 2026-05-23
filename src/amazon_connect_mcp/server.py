@@ -186,6 +186,17 @@ def _register_component_tools():
             connect_prompts_describe,
             connect_prompts_create,
             connect_prompts_delete,
+            # Outbound Communication
+            connect_start_outbound_voice_contact,
+            connect_stop_contact,
+            connect_describe_contact,
+            connect_update_contact_attributes,
+            # Routing Profiles
+            connect_routing_profiles_list,
+            connect_routing_profiles_describe,
+            # Users
+            connect_users_list,
+            connect_users_describe,
         )
         
         # Instance Tools
@@ -225,6 +236,20 @@ def _register_component_tools():
         mcp.tool()(connect_prompts_describe)
         mcp.tool()(connect_prompts_create)
         mcp.tool()(connect_prompts_delete)
+        
+        # Outbound Communication Tools
+        mcp.tool()(connect_start_outbound_voice_contact)
+        mcp.tool()(connect_stop_contact)
+        mcp.tool()(connect_describe_contact)
+        mcp.tool()(connect_update_contact_attributes)
+        
+        # Routing Profile Tools
+        mcp.tool()(connect_routing_profiles_list)
+        mcp.tool()(connect_routing_profiles_describe)
+        
+        # User Tools
+        mcp.tool()(connect_users_list)
+        mcp.tool()(connect_users_describe)
         
     except Exception as e:
         print(f"Warning: Failed to register component tools: {e}", file=sys.stderr)

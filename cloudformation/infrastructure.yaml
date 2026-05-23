@@ -1,0 +1,691 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Amazon Connect MCP - Unified Infrastructure
+  Creates Connect instance, phone number, queue, hours of operation,
+  Lambda + API Gateway bridge, and contact flow in a single stack.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Amazon Connect Configuration"
+        Parameters:
+          - InstanceAlias
+          - InstanceIdentityType
+          - ContactFlowName
+          - ContactFlowMessage
+      - Label:
+          default: "Phone Number Configuration"
+        Parameters:
+          - PhoneCountryCode
+          - PhoneType
+      - Label:
+          default: "Lambda & API Configuration"
+        Parameters:
+          - ApiStageName
+          - LambdaMemorySize
+          - LambdaTimeout
+      - Label:
+          default: "Logging"
+        Parameters:
+          - LogRetentionDays
+
+Parameters:
+  # ── Connect Instance ──
+  InstanceAlias:
+    Type: String
+    Description: "Unique alias/name for the Amazon Connect instance"
+    MinLength: 1
+    MaxLength: 62
+    ConstraintDescription: "Must be 1-62 alphanumeric/hyphen characters, unique across AWS accounts"
+  InstanceIdentityType:
+    Type: String
+    Default: CONNECT_MANAGED
+    Description: "Identity management type"
+    AllowedValues:
+      - CONNECT_MANAGED
+      - SAML
+      - EXISTING_DIRECTORY
+
+  # ── Contact Flow ──
+  ContactFlowName:
+    Type: String
+    Default: "MCP Outbound Flow"
+    Description: "Name for the default outbound contact flow"
+  ContactFlowMessage:
+    Type: String
+    Default: "Hello, this is an automated message from Amazon Connect MCP. We are reaching out to confirm your appointment. No action is needed at this time."
+    Description: "Default TTS message for the outbound contact flow (supports SSML)"
+
+  # ── Phone Number ──
+  PhoneCountryCode:
+    Type: String
+    Default: US
+    Description: "ISO country code for the phone number to claim"
+    AllowedValues:
+      - US
+      - CA
+      - GB
+      - AU
+  PhoneType:
+    Type: String
+    Default: TOLL_FREE
+    Description: "Type of phone number to claim"
+    AllowedValues:
+      - TOLL_FREE
+      - DID
+
+  # ── Lambda & API ──
+  ApiStageName:
+    Type: String
+    Default: prod
+    Description: "API Gateway stage name (also used as environment name)"
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+  LambdaMemorySize:
+    Type: Number
+    Default: 512
+    Description: "Lambda memory in MB"
+    MinValue: 128
+    MaxValue: 10240
+  LambdaTimeout:
+    Type: Number
+    Default: 30
+    Description: "Lambda timeout in seconds"
+    MinValue: 1
+    MaxValue: 900
+
+  # ── Logging ──
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    Description: "CloudWatch log retention in days"
+    AllowedValues: [1, 3, 7, 14, 30, 60, 90, 120, 150, 180, 365]
+
+Resources:
+  # ════════════════════════════════════════════════════════════
+  # Amazon Connect Instance
+  # ════════════════════════════════════════════════════════════
+  ConnectInstance:
+    Type: AWS::Connect::Instance
+    Properties:
+      IdentityManagementType: !Ref InstanceIdentityType
+      InstanceAlias: !Ref InstanceAlias
+      Attributes:
+        InboundCalls: true
+        OutboundCalls: true
+        ContactflowLogs: true
+        ContactLens: false
+        EarlyMedia: true
+
+  # ════════════════════════════════════════════════════════════
+  # Hours of Operation (M-F 9-5 local)
+  # ════════════════════════════════════════════════════════════
+  BusinessHours:
+    Type: AWS::Connect::HoursOfOperation
+    DependsOn: ConnectInstance
+    Properties:
+      InstanceArn: !GetAtt ConnectInstance.Arn
+      Name: "Business Hours (M-F 9-5)"
+      Description: "Standard business hours for MCP-managed queues"
+      TimeZone: "America/New_York"
+      Config:
+        - Day: MONDAY
+          StartTime: { Hours: 9, Minutes: 0 }
+          EndTime:   { Hours: 17, Minutes: 0 }
+        - Day: TUESDAY
+          StartTime: { Hours: 9, Minutes: 0 }
+          EndTime:   { Hours: 17, Minutes: 0 }
+        - Day: WEDNESDAY
+          StartTime: { Hours: 9, Minutes: 0 }
+          EndTime:   { Hours: 17, Minutes: 0 }
+        - Day: THURSDAY
+          StartTime: { Hours: 9, Minutes: 0 }
+          EndTime:   { Hours: 17, Minutes: 0 }
+        - Day: FRIDAY
+          StartTime: { Hours: 9, Minutes: 0 }
+          EndTime:   { Hours: 17, Minutes: 0 }
+      Tags:
+        - Key: Project
+          Value: amazon-connect-mcp
+
+  # ════════════════════════════════════════════════════════════
+  # Default Queue
+  # ════════════════════════════════════════════════════════════
+  DefaultQueue:
+    Type: AWS::Connect::Queue
+    DependsOn:
+      - ConnectInstance
+      - BusinessHours
+    Properties:
+      InstanceArn: !GetAtt ConnectInstance.Arn
+      Name: "MCP Default Queue"
+      Description: "Default queue for MCP-managed calls"
+      HoursOfOperationArn: !GetAtt BusinessHours.HoursOfOperationArn
+      MaxContacts: 100
+      Tags:
+        - Key: Project
+          Value: amazon-connect-mcp
+
+  # ════════════════════════════════════════════════════════════
+  # Contact Flow (Outbound - Play Prompt)
+  # ════════════════════════════════════════════════════════════
+  OutboundContactFlow:
+    Type: AWS::Connect::ContactFlow
+    DependsOn: ConnectInstance
+    Properties:
+      InstanceArn: !GetAtt ConnectInstance.Arn
+      Name: !Ref ContactFlowName
+      Type: CONTACT_FLOW
+      Content: !Sub |
+        {
+          "Version": "2019-10-30",
+          "StartAction": "PlayPrompt",
+          "Actions": [
+            {
+              "Identifier": "PlayPrompt",
+              "Type": "MessageParticipant",
+              "Parameters": {
+                "Text": "${ContactFlowMessage}"
+              },
+              "Transitions": {
+                "NextAction": "SetAttributes",
+                "Errors": [{"NextAction": "Disconnect"}],
+                "Conditions": []
+              }
+            },
+            {
+              "Identifier": "SetAttributes",
+              "Type": "UpdateContactAttributes",
+              "Parameters": {
+                "Attributes": {
+                  "call_type": "OUTBOUND_MCP",
+                  "message_delivered": "true"
+                }
+              },
+              "Transitions": {
+                "NextAction": "Disconnect"
+              }
+            },
+            {
+              "Identifier": "Disconnect",
+              "Type": "DisconnectParticipant",
+              "Parameters": {},
+              "Transitions": {}
+            }
+          ]
+        }
+      Tags:
+        - Key: Project
+          Value: amazon-connect-mcp
+
+  # ════════════════════════════════════════════════════════════
+  # Lambda IAM Role
+  # ════════════════════════════════════════════════════════════
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: connect-mcp-bridge-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ConnectFullAccess
+                Effect: Allow
+                Action:
+                  - connect:ListInstances
+                  - connect:DescribeInstance
+                  - connect:UpdateInstanceAttribute
+                  - connect:ListPhoneNumbers
+                  - connect:DescribePhoneNumber
+                  - connect:ClaimPhoneNumber
+                  - connect:ReleasePhoneNumber
+                  - connect:SearchAvailablePhoneNumbers
+                  - connect:ListQueues
+                  - connect:DescribeQueue
+                  - connect:CreateQueue
+                  - connect:UpdateQueue
+                  - connect:UpdateQueueName
+                  - connect:DeleteQueue
+                  - connect:ListHoursOfOperations
+                  - connect:DescribeHoursOfOperation
+                  - connect:CreateHoursOfOperation
+                  - connect:UpdateHoursOfOperation
+                  - connect:UpdateHoursOfOperationConfig
+                  - connect:DeleteHoursOfOperation
+                  - connect:ListHoursOfOperationOverrides
+                  - connect:ListPrompts
+                  - connect:DescribePrompt
+                  - connect:CreatePrompt
+                  - connect:DeletePrompt
+                  - connect:ListContactFlows
+                  - connect:DescribeContactFlow
+                  - connect:CreateContactFlow
+                  - connect:UpdateContactFlowContent
+                  - connect:UpdateContactFlowName
+                  - connect:DeleteContactFlow
+                  - connect:TagResource
+                  - connect:UntagResource
+                Resource: '*'
+              - Sid: XRayWrite
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: amazon-connect-mcp
+
+  # ════════════════════════════════════════════════════════════
+  # Lambda Function (Inline Code)
+  # ════════════════════════════════════════════════════════════
+  ConnectApiFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaExecutionRole
+      - ConnectInstance
+    Properties:
+      FunctionName: !Sub 'connect-api-bridge-${ApiStageName}'
+      Description: 'Amazon Connect API Bridge for MCP Server'
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.12
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref ApiStageName
+          CONNECT_INSTANCE_ID: !Select [1, !Split ['/', !GetAtt ConnectInstance.Arn]]
+          CONNECT_INSTANCE_ARN: !GetAtt ConnectInstance.Arn
+          AWS_XRAY_TRACING_NAME: connect-api-bridge
+      Code:
+        ZipFile: |
+          import json, boto3, os, logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              """Main Lambda handler for Connect API Bridge."""
+              http_method = event.get('httpMethod', event.get('requestContext', {}).get('http', {}).get('method', 'GET'))
+              path = event.get('path', event.get('rawPath', ''))
+
+              # Parse body
+              body = {}
+              if event.get('body'):
+                  try:
+                      body = json.loads(event['body']) if isinstance(event['body'], str) else event['body']
+                  except json.JSONDecodeError:
+                      pass
+
+              # Initialize Connect client
+              try:
+                  region = body.get('region', os.environ.get('AWS_REGION', 'us-east-1'))
+                  connect = boto3.client('connect', region_name=region)
+              except Exception as e:
+                  return _response(500, {'error': f'Failed to initialize Connect client: {str(e)}'})
+
+              # Extract action from path - path format: /phone-numbers/list => action=list, resource=phone-numbers
+              parts = [p for p in path.strip('/').split('/') if p]
+              try:
+                  # Exact health check
+                  if path in ('/health', '/') or (len(parts) == 1 and parts[0] == 'health'):
+                      return _response(200, {'status': 'healthy', 'version': '2.0.0', 'connect_instance': os.environ.get('CONNECT_INSTANCE_ID')})
+
+                  if len(parts) >= 2:
+                      resource = parts[0]
+                      action = parts[1]
+
+                      if resource == 'phone-numbers':
+                          if action == 'list':     return _list_phone_numbers(connect, body)
+                          elif action == 'search': return _search_phone_numbers(connect, body)
+                          elif action == 'claim':  return _claim_phone_number(connect, body)
+                          elif action == 'release': return _release_phone_number(connect, body)
+                      elif resource == 'queues':
+                          if action == 'list':     return _list_queues(connect, body)
+                          elif action == 'create': return _create_queue(connect, body)
+                          elif action == 'update': return _update_queue(connect, body)
+                          elif action == 'delete': return _delete_queue(connect, body)
+                      elif resource == 'hours-of-operations':
+                          if action == 'list':     return _list_hours(connect, body)
+                          elif action == 'create': return _create_hours(connect, body)
+                          elif action == 'update': return _update_hours(connect, body)
+                          elif action == 'delete': return _delete_hours(connect, body)
+                      elif resource == 'prompts':
+                          if action == 'list':     return _list_prompts(connect, body)
+                          elif action == 'create': return _create_prompt(connect, body)
+                          elif action == 'delete': return _delete_prompt(connect, body)
+                      elif resource == 'instances':
+                          if action == 'list':     return _list_instances(connect, body)
+
+                  return _response(404, {'error': f'Unknown route: {path}'})
+              except Exception as e:
+                  logger.exception("Handler error")
+                  return _response(500, {'error': str(e)})
+
+          # ── Helpers ──
+          def _response(status, body):
+              return {
+                  'statusCode': status,
+                  'headers': {
+                      'Content-Type': 'application/json',
+                      'Access-Control-Allow-Origin': '*',
+                      'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key',
+                      'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+                  },
+                  'body': json.dumps(body, default=str)
+              }
+
+          def _get_instance(body):
+              return body.get('instance_id') or os.environ.get('CONNECT_INSTANCE_ID')
+
+          # ── Phone Numbers ──
+          def _list_phone_numbers(connect, body):
+              params = {'InstanceId': _get_instance(body), 'MaxResults': body.get('max_results', 100)}
+              for k in ['PhoneNumberTypes', 'PhoneNumberCountryCodes']:
+                  if body.get(k): params[k] = body[k]
+              result = connect.list_phone_numbers(**{k: v for k, v in params.items() if v})
+              return _response(200, result)
+
+          def _search_phone_numbers(connect, body):
+              params = {
+                  'TargetArn': body.get('target_arn') or os.environ.get('CONNECT_INSTANCE_ARN'),
+                  'PhoneNumberCountryCode': body.get('phone_number_country_code', 'US'),
+                  'PhoneNumberType': body.get('phone_number_type', 'TOLL_FREE'),
+                  'MaxResults': body.get('max_results', 10)
+              }
+              if not params['TargetArn']:
+                  return _response(400, {'error': 'target_arn is required'})
+              result = connect.search_available_phone_numbers(**{k: v for k, v in params.items() if v})
+              return _response(200, result)
+
+          def _claim_phone_number(connect, body):
+              params = {
+                  'TargetArn': body.get('target_arn') or os.environ.get('CONNECT_INSTANCE_ARN'),
+                  'PhoneNumber': body.get('phone_number'),
+                  'Tags': body.get('tags', {})
+              }
+              if not params['PhoneNumber']:
+                  return _response(400, {'error': 'phone_number is required'})
+              result = connect.claim_phone_number(**{k: v for k, v in params.items() if v})
+              return _response(200, result)
+
+          def _release_phone_number(connect, body):
+              params = {'PhoneNumberId': body.get('phone_number_id')}
+              if not params['PhoneNumberId']:
+                  return _response(400, {'error': 'phone_number_id is required'})
+              result = connect.release_phone_number(**params)
+              return _response(200, result)
+
+          # ── Queues ──
+          def _list_queues(connect, body):
+              params = {'InstanceId': _get_instance(body), 'MaxResults': body.get('max_results', 100)}
+              result = connect.list_queues(**{k: v for k, v in params.items() if v})
+              return _response(200, result)
+
+          def _create_queue(connect, body):
+              params = {
+                  'InstanceId': _get_instance(body),
+                  'Name': body.get('name'),
+                  'Description': body.get('description', ''),
+                  'HoursOfOperationId': body.get('hours_of_operation_id'),
+                  'Tags': body.get('tags', {})
+              }
+              if not params['InstanceId'] or not params['Name']:
+                  return _response(400, {'error': 'instance_id and name are required'})
+              result = connect.create_queue(**{k: v for k, v in params.items() if v})
+              return _response(200, result)
+
+          def _update_queue(connect, body):
+              inst = _get_instance(body)
+              qid = body.get('queue_id')
+              if not inst or not qid:
+                  return _response(400, {'error': 'instance_id and queue_id are required'})
+              if body.get('name'):
+                  connect.update_queue_name(InstanceId=inst, QueueId=qid, Name=body['name'])
+                  if body.get('description'):
+                      connect.update_queue_name(InstanceId=inst, QueueId=qid, Description=body['description'])
+              if body.get('hours_of_operation_id'):
+                  connect.update_queue(InstanceId=inst, QueueId=qid, HoursOfOperationId=body['hours_of_operation_id'])
+              return _response(200, {'status': 'success', 'message': f'Queue {qid} updated'})
+
+          def _delete_queue(connect, body):
+              inst = _get_instance(body)
+              qid = body.get('queue_id')
+              if not inst or not qid:
+                  return _response(400, {'error': 'instance_id and queue_id are required'})
+              result = connect.delete_queue(InstanceId=inst, QueueId=qid)
+              return _response(200, result)
+
+          # ── Hours of Operations ──
+          def _list_hours(connect, body):
+              params = {'InstanceId': _get_instance(body), 'MaxResults': body.get('max_results', 100)}
+              result = connect.list_hours_of_operations(**{k: v for k, v in params.items() if v})
+              return _response(200, result)
+
+          def _create_hours(connect, body):
+              params = {
+                  'InstanceId': _get_instance(body),
+                  'Name': body.get('name'),
+                  'Description': body.get('description', ''),
+                  'TimeZone': body.get('time_zone', 'America/New_York'),
+                  'Config': body.get('config', [])
+              }
+              if not params['InstanceId'] or not params['Name']:
+                  return _response(400, {'error': 'instance_id and name are required'})
+              result = connect.create_hours_of_operation(**{k: v for k, v in params.items() if v})
+              return _response(200, result)
+
+          def _update_hours(connect, body):
+              inst = _get_instance(body)
+              hid = body.get('hours_of_operation_id')
+              if not inst or not hid:
+                  return _response(400, {'error': 'instance_id and hours_of_operation_id are required'})
+              if body.get('name'):
+                  connect.update_hours_of_operation(InstanceId=inst, HoursOfOperationId=hid, Name=body['name'])
+              if body.get('time_zone'):
+                  connect.update_hours_of_operation(InstanceId=inst, HoursOfOperationId=hid, TimeZone=body['time_zone'])
+              if body.get('config'):
+                  connect.update_hours_of_operation_config(InstanceId=inst, HoursOfOperationId=hid, Config=body['config'])
+              return _response(200, {'status': 'success', 'message': f'Hours {hid} updated'})
+
+          def _delete_hours(connect, body):
+              inst = _get_instance(body)
+              hid = body.get('hours_of_operation_id')
+              if not inst or not hid:
+                  return _response(400, {'error': 'instance_id and hours_of_operation_id are required'})
+              result = connect.delete_hours_of_operation(InstanceId=inst, HoursOfOperationId=hid)
+              return _response(200, result)
+
+          # ── Prompts ──
+          def _list_prompts(connect, body):
+              params = {'InstanceId': _get_instance(body), 'MaxResults': body.get('max_results', 100)}
+              result = connect.list_prompts(**{k: v for k, v in params.items() if v})
+              return _response(200, result)
+
+          def _create_prompt(connect, body):
+              params = {
+                  'InstanceId': _get_instance(body),
+                  'Name': body.get('name'),
+                  'Description': body.get('description', ''),
+                  'S3Uri': body.get('s3_uri'),
+                  'Tags': body.get('tags', {})
+              }
+              if not params['InstanceId'] or not params['Name']:
+                  return _response(400, {'error': 'instance_id and name are required'})
+              result = connect.create_prompt(**{k: v for k, v in params.items() if v})
+              return _response(200, result)
+
+          def _delete_prompt(connect, body):
+              inst = _get_instance(body)
+              pid = body.get('prompt_id')
+              if not inst or not pid:
+                  return _response(400, {'error': 'instance_id and prompt_id are required'})
+              result = connect.delete_prompt(InstanceId=inst, PromptId=pid)
+              return _response(200, result)
+
+          # ── Instances ──
+          def _list_instances(connect, body):
+              result = connect.list_instances()
+              return _response(200, result)
+      Tags:
+        - Key: Project
+          Value: amazon-connect-mcp
+
+  # ════════════════════════════════════════════════════════════
+  # CloudWatch Log Group
+  # ════════════════════════════════════════════════════════════
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ConnectApiFunction}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ════════════════════════════════════════════════════════════
+  # Lambda Permission for API Gateway
+  # ════════════════════════════════════════════════════════════
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ConnectApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*'
+
+  # ════════════════════════════════════════════════════════════
+  # API Gateway
+  # ════════════════════════════════════════════════════════════
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub 'connect-mcp-bridge-${ApiStageName}'
+      Description: 'API Gateway for Amazon Connect MCP Lambda Bridge'
+      EndpointConfiguration:
+        Types: [REGIONAL]
+
+  # Proxy Resource: /{proxy+}
+  ProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: '{proxy+}'
+
+  # ANY method on proxy resource
+  ProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectApiFunction.Arn}/invocations'
+
+  # OPTIONS for CORS on root
+  OptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !GetAtt ApiGateway.RootResourceId
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+            ResponseTemplates:
+              application/json: ''
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ProxyMethod
+      - OptionsMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref ApiStageName
+
+Outputs:
+  ConnectInstanceId:
+    Description: "Amazon Connect Instance ID"
+    Value: !Select [1, !Split ['/', !GetAtt ConnectInstance.Arn]]
+
+  ConnectInstanceArn:
+    Description: "Amazon Connect Instance ARN"
+    Value: !GetAtt ConnectInstance.Arn
+
+  ConnectInstanceAlias:
+    Description: "Amazon Connect Instance alias/name"
+    Value: !Ref InstanceAlias
+
+  DefaultQueueId:
+    Description: "Default Queue ID"
+    Value: !GetAtt DefaultQueue.QueueArn
+
+  DefaultQueueArn:
+    Description: "Default Queue ARN"
+    Value: !GetAtt DefaultQueue.QueueArn
+
+  BusinessHoursId:
+    Description: "Business Hours of Operation ID"
+    Value: !GetAtt BusinessHours.HoursOfOperationArn
+
+  OutboundContactFlowId:
+    Description: "Outbound Contact Flow ID"
+    Value: !GetAtt OutboundContactFlow.ContactFlowArn
+
+  ApiGatewayUrl:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}'
+
+  LambdaFunctionArn:
+    Description: "Lambda Function ARN"
+    Value: !GetAtt ConnectApiFunction.Arn
+
+  LambdaFunctionName:
+    Description: "Lambda Function Name"
+    Value: !Ref ConnectApiFunction
+
+  McpServerConfig:
+    Description: "MCP Server configuration snippet"
+    Value: !Sub |
+      {
+        "mcpServers": {
+          "amazon-connect": {
+            "command": "python",
+            "args": ["-m", "amazon_connect_mcp.server"],
+            "env": {
+              "AWS_REGION": "${AWS::Region}",
+              "CONNECT_INSTANCE_ID": "${ConnectInstanceId}",
+              "CONNECT_API_BRIDGE_URL": "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}"
+            }
+          }
+        }
+      }
