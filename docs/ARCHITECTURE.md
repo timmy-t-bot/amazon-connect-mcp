@@ -1,765 +1,412 @@
-# Amazon Connect MCP Server - Architecture Blueprint
+# Amazon Connect MCP Server — Architecture
 
-**Version:** 1.0  
-**Last Updated:** May 2026  
-**Status:** Architectural Design Phase
+## Overview
 
----
-
-## 1. Executive Summary
-
-This document defines the architectural blueprint for the Amazon Connect MCP Server project. The server will enable AI agents (Hermes) to use Amazon Connect as an outbound communication platform with comprehensive infrastructure setup, contact flow management, and seamless integration capabilities.
-
-### Key Differentiators
-
-- **Infrastructure-First**: Unlike the community server (mundurragacl/amazon-connect-mcp) that focuses on operations, we prioritize "build-it-once" components
-- **Complete API Coverage**: Direct MCP tools + Lambda/API Gateway bridge for missing APIs
-- **Parameterized Contact Flows**: Dynamic outbound flow creation with customizable messages
-- **Gap-Filling**: Addresses Phone Number claiming, Prompt management, and Instance lifecycle gaps
+A Model Context Protocol (MCP) server that lets AI agents manage Amazon Connect and place outbound voice calls with dynamic messages — deployed in one command.
 
 ---
 
-## 2. Research Findings
-
-### 2.1 Community Server Analysis (mundurragacl/amazon-connect-mcp)
-
-| Aspect | Details |
-|--------|---------|
-| **Repository** | https://github.com/mundurragacl/amazon-connect-mcp |
-| **Stars** | 9 |
-| **Tools** | 85+ tools across 9 categories |
-| **Architecture** | Python + FastMCP + boto3 |
-| **Focus** | Contact center operations, not infrastructure setup |
-
-### 2.2 Existing Tool Categories (Community)
-
-| Category | Tool Count | Direct APIs |
-|----------|------------|-------------|
-| **Core** | 9 | `connect` |
-| **Contacts** | 8 | `connect` |
-| **Config** | 17 | `connect` |
-| **Analytics** | 5 | `connect` |
-| **Profiles** | 9 | `customer-profiles` |
-| **Campaigns** | 10 | `connect-campaigns` |
-| **Cases** | 17 | `connectcases` |
-| **AI** | 8 | `qconnect` |
-| **Wizard/Templates** | 2 | N/A (Internal) |
-
-### 2.3 Identified Gaps
-
-#### **GAP 1: Phone Number Management**
-- `search_available_phone_numbers` - NOT implemented
-- `claim_phone_number` - NOT implemented
-- `import_phone_number` - NOT implemented
-- Community server only: `config_list_phone_numbers`, no claiming capability
-
-#### **GAP 2: Prompt Management**
-- `create_prompt` - NOT implemented
-- `update_prompt` - NOT implemented
-- `describe_prompt` - NOT implemented
-- Community server: Prompts managed manually via console
-
-#### **GAP 3: Instance Lifecycle**
-- `create_instance` - NOT implemented
-- `replicate_instance` - NOT implemented
-- `delete_instance` - NOT implemented
-- Community server: Assumes pre-existing instance
-
-#### **GAP 4: Contact Flow Parameterization**
-- Community: Creates flows but content is raw JSON
-- Missing: Templated flows with variable substitution
-- Missing: Parameterized outbound flows with custom messages
-
----
-
-## 3. AWS Connect Service APIs
-
-### 3.1 Service API Matrix
-
-| Service | CLI Service | Priority | MCP Coverage | Lambda Bridge |
-|---------|-------------|----------|--------------|---------------|
-| **Amazon Connect** | `connect` | Critical | Direct | Limited (complex flows only) |
-| **Connect Cases** | `connectcases` | High | Direct | No |
-| **Customer Profiles** | `customer-profiles` | High | Direct | No |
-| **Connect Campaigns v2** | `connectcampaignsv2` | High | Direct | No |
-| **Amazon Q / QConnect** | `qconnect` | Medium | Direct | No |
-| **Connect Contact Lens** | `connect-contact-lens` | Medium | Direct | No |
-| **Connect WAF** | NA | Low | N/A | Terraform only |
-
-### 3.2 Direct MCP Tools (No Bridge Needed)
-
-The following Amazon Connect APIs have direct MCP tool coverage:
-
-#### Core Contact Operations
-- `connect:StartOutboundVoiceContact`
-- `connect:StartChatContact`
-- `connect:StartTaskContact`
-- `connect:StopContact`
-- `connect:TransferContact`
-- `connect:UpdateContactAttributes`
-
-#### Instance Management
-- `connect:DescribeInstance`
-- `connect:ListInstances`
-- `connect:UpdateInstanceAttribute`
-
-#### Contact Flows
-- `connect:CreateContactFlow`
-- `connect:UpdateContactFlowContent`
-- `connect:DescribeContactFlow`
-- `connect:ListContactFlows`
-
-#### Queues
-- `connect:CreateQueue`
-- `connect:UpdateQueueStatus`
-- `connect:DescribeQueue`
-- `connect:ListQueues`
-
-#### Users & Routing
-- `connect:CreateUser`
-- `connect:UpdateUserRoutingProfile`
-- `connect:CreateRoutingProfile`
-- `connect:AssociateQueueQuickConnects`
-
-#### Hours of Operation
-- `connect:CreateHoursOfOperation`
-- `connect:UpdateHoursOfOperation`
-- `connect:ListHoursOfOperations`
-
-#### Campaigns
-- `connect-campaigns:CreateCampaign`
-- `connect-campaigns:StartCampaign`
-- `connect-campaigns:PauseCampaign`
-- `connect-campaigns:StopCampaign`
-
-#### Cases
-- `connectcases:CreateCase`
-- `connectcases:GetCase`
-- `connectcases:UpdateCase`
-- `connectcases:ListDomains`
-- `connectcases:CreateTemplate`
-
-### 3.2 Lambda/API Gateway Bridge APIs
-
-These APIs require the Lambda bridge due to complexity, statefulness, or missing AWS SDK support:
-
-| API | Reason | Bridge Pattern |
-|-----|--------|----------------|
-| `connect:CreateInstance` | Multi-step, requires role/policy setup | Lambda workflow |
-| `connect:ReplicateInstance` | Cross-region, long-running | Lambda + Step Functions |
-| `connect:CreatePrompt` (SSML) | Audio synthesis, S3 dependencies | Lambda + S3 |
-| `connect:UpdatePrompt` (SSML) | Audio file regeneration | Lambda + S3 |
-| `connect:GetPromptFile` | S3 pre-signed URL retrieval | Lambda proxy |
-| `connect:ListSecurityKeys` | Certificate management | Lambda wrapper |
-
-### 3.3 Terraform/Gaps
-
-These are NOT MCP tools but Infrastructure-as-Code:
-
-- `aws_connect_instance` - Terraform only (IAM complexity)
-- `aws_connect_phone_number` - Terraform/manual (regulatory restrictions)
-- `aws_connect_quick_connect` - Terraform preferred
-- `aws_connect_integration_association` - Terraform
-
----
-
-## 4. Tool Taxonomy
-
-### 4.1 Complete Tool Categories
+## Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    AMAZON CONNECT MCP SERVER                     │
-│                    Target: 100+ Total Tools                      │
-├─────────────────────────────────────────────────────────────────┤
-│ TIER 1: Infrastructure & Setup (20 tools)                     │
-│ ──────────────────────────────────────────────                  │
-│ instance_*:                                                     │
-│   - instance_list_instances (multi-region)                        │
-│   - instance_describe_instance                                  │
-│   - instance_create_instance [BRIDGE]                           │
-│   - instance_replicate_instance [BRIDGE]                      │
-│   - instance_update_instance_attribute                          │
-│   - instance_delete_instance [BRIDGE]                         │
-│                                                                 │
-│ phone_numbers_*:                                                │
-│   - phone_numbers_search_available                              │
-│   - phone_numbers_claim_number [BRIDGE]                         │
-│   - phone_numbers_list_numbers                                  │
-│   - phone_numbers_associate_to_flow                             │
-│   - phone_numbers_release_number                                │
-│   - phone_numbers_import_number [BRIDGE]                        │
-│                                                                 │
-│ prompts_*:                                                      │
-│   - prompts_list_prompts                                        │
-│   - prompts_create_prompt [BRIDGE]                              │
-│   - prompts_update_prompt [BRIDGE]                              │
-│   - prompts_describe_prompt                                     │
-│   - prompts_get_prompt_file [BRIDGE]                          │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│ TIER 2: Configuration & Routing (25 tools)                        │
-│ ───────────────────────────────────────────────────────────────   │
-│ contact_flows_*:                                                 │
-│   - contact_flows_list                                           │
-│   - contact_flows_create                                         │
-│   - contact_flows_create_outbound [TEMPLATED]                  │
-│   - contact_flows_describe                                       │
-│   - contact_flows_update_content                                 │
-│   - contact_flows_delete                                         │
-│   - contact_flows_create_version                                 │
-│                                                                 │
-│ queues_*:                                                       │
-│   - queues_list_queues                                          │
-│   - queues_create_queue                                           │
-│   - queues_describe_queue                                         │
-│   - queues_update_queue_status                                    │
-│   - queues_update_queue_configs                                   │
-│                                                                 │
-│ hours_of_operation_*:                                           │
-│   - hours_list_hours                                              │
-│   - hours_create_hours                                            │
-│   - hours_update_hours                                            │
-│   - hours_create_override                                         │
-│                                                                 │
-│ routing_profiles_*:                                             │
-│   - routing_list_profiles                                         │
-│   - routing_create_profile                                        │
-│   - routing_associate_queues                                      │
-│                                                                 │
-│ quick_connects_*:                                               │
-│   - quick_connects_list                                           │
-│   - quick_connects_create                                         │
-│   - quick_connects_delete                                         │
-├─────────────────────────────────────────────────────────────────┤
-│ TIER 3: Contacts & Operations (20 tools)                        │
-│ ───────────────────────────────────────────────────────────────   │
-│ contacts_*:                                                      │
-│   - contacts_start_outbound_voice                               │
-│   - contacts_start_outbound_chat                                │
-│   - contacts_start_inbound_chat                                 │
-│   - contacts_start_task                                           │
-│   - contacts_stop_contact                                         │
-│   - contacts_transfer                                             │
-│   - contacts_update_attributes                                    │
-│   - contacts_search_contacts                                      │
-│   - contacts_describe_contact                                     │
-│                                                                 │
-│ recording_*:                                                    │
-│   - recording_start_recording                                   │
-│   - recording_stop_recording                                      │
-│   - recording_suspend_recording                                   │
-│   - recording_resume_recording                                    │
-├─────────────────────────────────────────────────────────────────┤
-│ TIER 4: Campaigns & Outbound (15 tools)                          │
-│ ──────────────────────────────────────────────────────────────   │
-│ campaigns_*:                                                     │
-│   - campaigns_list_campaigns                                      │
-│   - campaigns_create_campaign                                     │
-│   - campaigns_describe_campaign                                   │
-│   - campaigns_start_campaign                                      │
-│   - campaigns_pause_campaign                                      │
-│   - campaigns_resume_campaign                                     │
-│   - campaigns_stop_campaign                                        │
-│   - campaigns_delete_campaign                                      │
-│   - campaigns_get_state                                            │
-│   - campaigns_add_contacts                                         │
-│   - campaigns_onboard_instance                                     │
-│   - campaigns_check_onboarding_status                              │
-├─────────────────────────────────────────────────────────────────┤
-│ TIER 5: Cases & Agent Workspace (15 tools)                       │
-│ ────────────────────────────────────────────────────────────   │
-│ cases_*:                                                         │
-│   - cases_list_domains                                           │
-│   - cases_create_domain                                          │
-│   - cases_list_templates                                          │
-│   - cases_create_template                                         │
-│   - cases_create_case                                             │
-│   - cases_update_case                                             │
-│   - cases_get_case                                                │
-│   - cases_search_cases                                            │
-│   - cases_create_field                                            │
-│   - cases_list_fields                                             │
-│                                                                 │
-│ agent_status_*:                                                  │
-│   - agent_status_list_statuses                                    │
-│   - agent_status_create_status                                    │
-│   - agent_status_put_user_status                                  │
-│                                                                 │
-│ users_*:                                                         │
-│   - users_list_users                                               │
-│   - users_create_user                                              │
-│   - users_update_routing_profile                                   │
-├─────────────────────────────────────────────────────────────────┤
-│ TIER 6: Analytics & AI (8 tools)                                 │
-│ ────────────────────────────────────────────────                 │
-│ analytics_*:                                                     │
-│   - analytics_get_current_metrics                                  │
-│   - analytics_get_metric_data                                      │
-│   - analytics_search_contacts                                      │
-│                                                                 │
-│ ai_qconnect_*:                                                   │
-│   - ai_qconnect_list_knowledge_bases                             │
-│   - ai_qconnect_query_assistant                                  │
-│   - ai_qconnect_get_recommendations                                │
-│   - ai_search_quick_responses                                      │
-│                                                                 │
-│ contact_lens_*:                                                  │
-│   - contact_lens_list_realtime_segments                            │
-├─────────────────────────────────────────────────────────────────┤
-│ TIER 7: Lambda Bridge Operations (Internal)                      │
-│ ─────────────────────────────────────────────────────────────     │
-│ lambda_bridge_*:                                                  │
-│   - lambda_create_instance_workflow                                │
-│   - lambda_create_prompt_with_audio                              │
-│   - lambda_replicate_instance_workflow                           │
-│   - lambda_get_prompt_presigned_url                              │
-│                                                                 │
-│ TIER 8: Utility & Helper Tools (5 tools)                       │
-│ ───────────────────────────────────────────────                 │
-│ utils_*:                                                         │
-│   - utils_validate_phone_number                                    │
-│   - utils_format_contact_flow_json                               │
-│   - utils_generate_ssml_prompt                                     │
-│   - utils_get_instance_summary                                     │
-│   - utils_check_prerequisites                                      │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         AI AGENT OR CLIENT                                │
+│  (Hermes, Claude, Cursor, Amazon Q, any MCP client)                     │
+└──────────────────────────────┬───────────────────────────────────────────┘
+                               │ STDIO or SSE (MCP Protocol)
+┌──────────────────────────────▼───────────────────────────────────────────┐
+│                    AMAZON CONNECT MCP SERVER                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐ │
+│  │  FastMCP Python Server                                               │ │
+│  │  • 48+ MCP tools registered                                        │ │
+│  │  • Direct boto3 calls to AWS APIs                                   │ │
+│  │  • Contact flow templates (JSON with {{variable}} substitution)     │ │
+│  │  • Lambda API bridge for extended operations (phone claiming, etc.)   │ │
+│  └──────────────────────────────┬───────────────────────────────────────┘ │
+└───────────────────────────────┼───────────────────────────────────────────┘
+                                │ boto3
+┌───────────────────────────────▼───────────────────────────────────────────┐
+│                  AWS CLOUDFORMATION SINGLE STACK                           │
+│  ┌──────────────────────────┐  ┌──────────────────────────┐               │
+│  │  Amazon Connect Instance │  │  Lambda + API Gateway    │               │
+│  │  • Instance + Alias      │  │  • Python 3.12 handler   │               │
+│  │  • Phone Number          │  │  • REST API endpoints     │               │
+│  │  • Default Queue         │  │  • CORS enabled           │               │
+│  │  • Hours of Operation    │  │  • CloudWatch logs        │               │
+│  │  • Outbound Contact Flow │  │                           │               │
+│  └────────────────────┬─────┘  └────────────────────┬────┘               │
+│                       │                              │                    │
+│  ┌────────────────────▼──────┐  ┌───────────────────▼────┐              │
+│  │  IAM Role (Least Privilege)│  │  CloudWatch Logs       │              │
+│  │  • connect:*               │  │  • 14-day retention    │              │
+│  │  • lambda:Invoke           │  │  • Auto-cleanup        │              │
+│  │  • apigateway:Invoke       │  │                        │              │
+│  └────────────────────────────┘  └────────────────────────┘              │
+└──────────────────────────────────────────────────────────────────────────┘
+                               │
+┌──────────────────────────────▼───────────────────────────────────────────┐
+│                         CUSTOMER PHONE                                    │
+│  • Receives TTS message from contact flow                                  │
+│  • Can press DTMF (1=confirm, 2=decline) if interactive mode            │
+│  • Attributes (message, etc.) passed via $.Attributes.<key>                │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
-
-### 4.2 Tool Naming Convention
-
-| Pattern | Example | Description |
-|---------|---------|-------------|
-| `{category}_{action}` | `contacts_start_outbound_voice` | Standard operation |
-| `{category}_{resource}_{action}` | `queues_create_queue` | Resource-specific |
-| `{service}_{category}_{action}` | `ai_qconnect_query_assistant` | AWS service prefix |
-| `{resource}_{action}_{target}` | `phone_numbers_claim_number` | Target-specific action |
-| `utils_{purpose}` | `utils_validate_phone_number` | Utility tools |
 
 ---
 
-## 5. Lambda/API Gateway Bridge Architecture
+## How Data Flows
 
-### 5.1 Bridge Design Pattern
+### 1. Deploy (One Command)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     MCP SERVER (Python)                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │ Direct Tool │  │ Direct Tool │  │ Lambda Tool │             │
-│  │ (boto3)     │  │ (boto3)     │  │ (HTTP Call) │             │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘             │
-└─────────┼────────────────┼────────────────┼───────────────────────┘
-          │                │                │
-          ▼                ▼                ▼
-    ┌────────────┐   ┌────────────┐   ┌────────────┐
-    │ AWS SDK    │   │ AWS SDK    │   │ API        │
-    │ (boto3)    │   │ (boto3)    │   │ Gateway    │
-    └────────────┘   └────────────┘   └──────┬─────┘
-                                            │
-                                   ┌────────▼────────┐
-                                   │   Lambda        │
-                                   │   Function      │
-                                   │  ┌──────────┐  │
-                                   │  │ Workflow │  │
-                                   │  │ Handler  │  │
-                                   │  └────┬─────┘  │
-                                   └───────┼───────┘
-                                           │
-                             ┌─────────────┼─────────────┐
-                             │             │             │
-                             ▼             ▼             ▼
-                       ┌──────────┐  ┌──────────┐  ┌──────────┐
-                       │  Step    │  │   S3     │  │  AWS     │
-                       │Functions │  │  Bucket  │  │ Connect  │
-                       │(long-run)│  │(prompts) │  │   API    │
-                       └──────────┘  └──────────┘  └──────────┘
+User runs: ./deploy.sh 
+    → Checks AWS credentials
+    → Creates CloudFormation stack (5 min)
+    → Auto-claims phone number
+    → Tests /health endpoint
+    → Outputs MCP config JSON (copy-paste ready)
 ```
 
-### 5.2 Bridge Function Specifications
+### 2. Place Outbound Call (AI Agent)
 
-#### Function: `connect-instance-lifecycle`
-- **Trigger**: API Gateway POST `/bridge/instance`
-- **Purpose**: Create/Replicate/Delete Connect instances
-- **Complexity**: Requires IAM role creation, S3 bucket setup, CloudWatch config
-- **Input**: `action` (create/replicate/delete), `instance_alias`, `region`
-- **Output**: Instance ARN, status, dashboard URL
-
-#### Function: `connect-prompt-manager`
-- **Trigger**: API Gateway POST `/bridge/prompt`
-- **Purpose**: Create/update prompts with SSML support
-- **Complexity**: Audio file generation, S3 upload, Connect API sync
-- **Input**: `prompt_name`, `ssml_content` or `text`, `language`
-- **Output**: Prompt ARN, S3 URL
-
-#### Function: `connect-workflow-manager`
-- **Trigger**: API Gateway POST `/bridge/workflow`
-- **Purpose**: Multi-step operations (claim number + associate flow)
-- **Complexity**: Transaction coordination across services
-- **Input**: Workflow descriptor
-- **Output**: Operation status, rollback capability
-
-### 5.3 API Gateway Endpoints
-
-| Endpoint | Method | Lambda | Purpose |
-|----------|--------|--------|---------|
-| `/bridge/instance` | POST | `instance-lifecycle` | Create/replicate/delete |
-| `/bridge/prompt` | POST | `prompt-manager` | SSML prompt create/update |
-| `/bridge/workflow` | POST | `workflow-manager` | Multi-step operations |
-| `/bridge/status/{id}` | GET | `status-check` | Async operation status |
-| `/bridge/rollback/{id}` | POST | `rollback-manager` | Undo failed operations |
-
----
-
-## 6. Contact Flow Templates
-
-### 6.1 Parameterized Outbound Flow Template
-
-```json
-{
-  "Version": "2019-10-30",
-  "StartAction": "PlayGreeting",
-  "Actions": [
-    {
-      "Identifier": "PlayGreeting",
-      "Type": "MessageParticipant",
-      "Parameters": {
-        "Text": "{{greeting_message}}",
-        "SSML": "{{greeting_ssml}}"
-      },
-      "Transitions": {
-        "NextAction": "WaitForResponse"
-      }
-    },
-    {
-      "Identifier": "WaitForResponse",
-      "Type": "Wait",
-      "Parameters": {
-        "TimeoutSeconds": {{wait_timeout}}
-      },
-      "Transitions": {
-        "TimeoutAction": "Disconnect",
-        "NextAction": "CheckIntent"
-      }
-    },
-    {
-      "Identifier": "CheckIntent",
-      "Type": "GetUserInput",
-      "Parameters": {
-        "Text": "{{confirmation_question}}",
-        "LexV2Bot": {
-          "AliasArn": "{{lex_bot_arn}}"
+```
+AI Agent calls MCP tool:
+    connect_start_outbound_voice_contact(
+        instance_id="1234...",
+        destination_phone_number="+14155550100",
+        contact_flow_id="abcdef...",
+        source_phone_number="+18005550100",
+        attributes={
+            "message": "Hi John, your appointment tomorrow at 2PM. Press 1 to confirm."
         }
-      },
-      "Transitions": {
-        "NextAction": "ProcessIntent"
-      }
-    },
-    {
-      "Identifier": "ProcessIntent",
-      "Type": "InvokeLambdaFunction",
-      "Parameters": {
-        "LambdaFunctionARN": "{{lambda_arn}}",
-        "InvocationTimeLimitSeconds": 8
-      },
-      "Transitions": {
-        "NextAction": "PlayConfirmation"
-      }
-    },
-    {
-      "Identifier": "PlayConfirmation",
-      "Type": "MessageParticipant",
-      "Parameters": {
-        "Text": "{{confirmation_reply}}"
-      },
-      "Transitions": {
-        "NextAction": "SetAttributes"
-      }
-    },
-    {
-      "Identifier": "SetAttributes",
-      "Type": "UpdateContactAttributes",
-      "Parameters": {
-        "Attributes": {
-          "call_result": "{{call_result}}",
-          "callback_requested": "{{callback_needed}}"
-        }
-      },
-      "Transitions": {
-        "NextAction": "Disconnect"
-      }
-    },
-    {
-      "Identifier": "Disconnect",
-      "Type": "DisconnectParticipant",
-      "Parameters": {}
-    }
-  ],
-  "Variables": {
-    "greeting_message": {
-      "type": "string",
-      "required": true,
-      "description": "Message to play when call connects",
-      "ssml_enabled": true
-    },
-    "greeting_ssml": {
-      "type": "string",
-      "required": false,
-      "description": "SSML version of greeting for better TTS"
-    },
-    "wait_timeout": {
-      "type": "integer",
-      "default": 5,
-      "min": 1,
-      "max": 30,
-      "description": "Seconds to wait for user response"
-    },
-    "confirmation_question": {
-      "type": "string",
-      "required": true,
-      "description": "Question to ask user for confirmation"
-    },
-    "confirmation_reply": {
-      "type": "string",
-      "required": true,
-      "description": "Response to user confirmation"
-    },
-    "lex_bot_arn": {
-      "type": "arn",
-      "required": false,
-      "description": "Lex bot for intent recognition"
-    },
-    "lambda_arn": {
-      "type": "arn",
-      "required": true,
-      "description": "Lambda for custom business logic"
-    },
-    "call_result": {
-      "type": "enum",
-      "values": ["SUCCESS", "NO_ANSWER", "BUSY", "FAILED"],
-      "default": "SUCCESS"
-    },
-    "callback_needed": {
-      "type": "boolean",
-      "default": false
-    }
-  }
-}
-```
-
-### 6.2 Template Engine
-
-The MCP server will implement a template engine at `src/amazon_connect_mcp/templates/`:
-
-```python
-# Template engine pseudocode
-
-templates/
-├── __init__.py
-├── engine.py           # Template rendering engine
-├── registry.py         # Template registration
-├── outbound/
-│   ├── basic_notification.json
-│   ├── appointment_reminder.json
-│   ├── survey_invitation.json
-│   └── payment_reminder.json
-├── inbound/
-│   ├── basic_ivr.json
-│   └── callback_request.json
-└── shared/
-    ├── modules/
-    │   ├── validate_input.json
-    │   └── log_to_s3.json
-    └── snippets/
-        ├── greeting.json
-        └── farewell.json
-```
-
----
-
-## 7. Implementation Roadmap
-
-### Phase 1: Foundation (Weeks 1-2)
-- [ ] Project structure setup
-- [ ] Core MCP server with FastMCP
-- [ ] AWS SDK client abstractions
-- [ ] Direct tool categories: contacts, analytics
-- [ ] Basic connection tests
-
-### Phase 2: Infrastructure (Weeks 3-4)
-- [ ] Instance management tools
-- [ ] Lambda bridge setup (API Gateway + Lambda)
-- [ ] Phone numbers bridge APIs
-- [ ] Prompt management bridge
-- [ ] Infrastructure validation tests
-
-### Phase 3: Configuration (Weeks 5-6)
-- [ ] Contact flow CRUD tools
-- [ ] Queue and routing configuration
-- [ ] Hours of operation management
-- [ ] Template engine implementation
-- [ ] Parameterized flow creation
-
-### Phase 4: Operations (Weeks 7-8)
-- [ ] Campaigns integration
-- [ ] Cases integration
-- [ ] Agent status tracking
-- [ ] Recording management
-- [ ] Real-time metrics
-
-### Phase 5: AI & Polish (Weeks 9-10)
-- [ ] QConnect integration
-- [ ] Contact Lens analytics
-- [ ] Documentation and guides
-- [ ] Integration tests
-- [ ] Performance optimization
-
----
-
-## 8. Security Considerations
-
-### 8.1 IAM Permissions Model
-
-#### MCP Server Execution Role
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ConnectCoreAccess",
-      "Effect": "Allow",
-      "Action": [
-        "connect:*",
-        "connectcases:*",
-        "connect-campaigns:*"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "LambdaBridgeInvoke",
-      "Effect": "Allow",
-      "Action": [
-        "lambda:InvokeFunction",
-        "apigateway:GET"
-      ],
-      "Resource": "arn:aws:lambda:*:*:function:connect-bridge-*"
-    }
-  ]
-}
-```
-
-#### Lambda Bridge Execution Role
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ConnectInstanceManagement",
-      "Effect": "Allow",
-      "Action": [
-        "connect:CreateInstance",
-        "connect:DeleteInstance",
-        "connect:ReplicateInstance"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "IAMForInstance",
-      "Effect": "Allow",
-      "Action": [
-        "iam:CreateRole",
-        "iam:PutRolePolicy",
-        "iam:AttachRolePolicy"
-      ],
-      "Resource": "arn:aws:iam::*:role/connect-*",
-      "Condition": {
-        "StringLikeIfExists": {
-          "iam:PolicyName": ["Connect*"]
-        }
-      }
-    }
-  ]
-}
-```
-
-### 8.2 Data Protection
-
-- **Phone Numbers**: Masked in logs (E.164 format shown only on success)
-- **Audio Files**: Encrypted at rest in S3 (SSE-KMS)
-- **SSML Content**: Not logged in plain text (hash only)
-- **Tokens**: Rotated every 24 hours
-
----
-
-## 9. Testing Strategy
-
-### 9.1 Unit Tests
-- Mock all AWS SDK calls
-- Test template rendering
-- Validate parameter substitution
-
-### 9.2 Integration Tests
-```python
-# Example integration test
-async def test_outbound_flow_creation():
-    # Create test flow
-    flow = await config_create_contact_flow(
-        name="test_outbound_{{timestamp}}",
-        template="outbound_appointment",
-        params={"greeting": "Hello from test"}
     )
-    
-    # Verify flow content
-    assert flow.status == "ACTIVE"
-    
-    # Cleanup
-    await config_delete_contact_flow(flow.id)
+
+    → boto3 → connect:StartOutboundVoiceContact
+    → AWS dials customer
+    → Contact flow executes
+    → PlayPrompt reads $.Attributes.message
+    → GetParticipantInput listens for 1 or 2
+    → Stores disposition in contact attributes
 ```
 
-### 9.3 End-to-End Tests
-- Full call flow: Claim number → Create flow → Make call → Verify
-- Campaign flow: Onboard → Create → Add contacts → Start → Verify
-- Error scenarios: Wrong region, invalid permissions, rate limiting
+### 3. Manage Infrastructure (AI Agent)
+
+```
+AI Agent queries:
+    connect_list_instances()          → All Connect instances
+    connect_list_queues(instance_id)    → All queues
+    connect_list_phone_numbers(...)    → Claimed numbers
+    connect_search_available_numbers(...) → Find new toll-free/DID numbers
+    connect_claim_phone_number(...)   → Claim a number
+    contact_flows_create_outbound(...) → Create new outbound flow from template
+```
 
 ---
 
-## 10. References
+## File Layout
 
-### AWS Documentation
-- [Amazon Connect API](https://docs.aws.amazon.com/connect/latest/APIReference/Welcome.html)
-- [ConnectCases API](https://docs.aws.amazon.com/connect/latest/case-api/Welcome.html)
-- [ConnectCampaigns v2](https://docs.aws.amazon.com/connect-campaigns/latest/APIReference/Welcome.html)
-- [QConnect API](https://docs.aws.amazon.com/amazonq/latest/connect-api/Welcome.html)
-
-### Community Resources
-- [mundurragacl/amazon-connect-mcp](https://github.com/mundurragacl/amazon-connect-mcp) - Reference implementation
-- [awslabs/mcp](https://github.com/awslabs/mcp) - AWS MCP servers (no Connect)
-- [MCP Specification](https://modelcontextprotocol.io/specification/)
-
-### Related Skills
-- `/home/mike/.hermes/skills/mcp/native-mcp/references/amazon-connect-mcp.md` - Prior research
+```
+amazon-connect-mcp/
+│
+│── deploy.sh                          ← Main entry point (1-liner)
+│── cloudformation/
+│   └── infrastructure.yaml              ← Single stack: everything
+│
+│── src/
+│   ├── amazon_connect_mcp/
+│   │   ├── server.py                    ← FastMCP registration (48 tools)
+│   │   ├── config.py                    ← Env/config loader
+│   │   ├── connect_api_bridge.py        ← Lambda-backed extended APIs
+│   │   │
+│   │   ├── components/                    ← Direct boto3 tools
+│   │   │   ├── instance_manager.py      ← create, describe, list, delete instance
+│   │   │   ├── queues.py                ← queue CRUD
+│   │   │   ├── phone_numbers.py         ← search, claim, release, list
+│   │   │   ├── hours_of_operation.py    ← hours CRUD
+│   │   │   ├── prompts.py               ← prompt CRUD
+│   │   │   ├── outbound.py              ← ⭐ StartOutboundVoiceContact + Attributes
+│   │   │   ├── routing_profiles.py      ← list, describe
+│   │   │   ├── users.py                 ← list, describe
+│   │   │   └── integration.py           ← component catalog
+│   │   │
+│   │   └── templates/                   ← Contact flow JSON templates
+│   │       ├── engine.py                ← Load, render, validate templates
+│   │       ├── registry.py              ← Template catalog
+│   │       └── outbound/
+│   │           ├── universal_outbound.json      ← ⭐ Master outbound flow
+│   │           ├── ai_agent_outbound.json       ← Bedrock/Lex interactive
+│   │           ├── play_prompt_outbound.json      ← Simple play + hangup
+│   │           ├── appointment_reminder.json      ← Appointment-specific
+│   │           └── payment_reminder.json        ← Payment-specific
+│   │
+│   └── contact_flows/
+│       ├── contact_flow_tools.py        ← create, update, delete flows
+│       └── __init__.py
+│
+│── lambda/
+│   ├── connect_api_handler.py           ← Lambda entry (bridge)
+│   ├── openapi.yaml                     ← REST API spec
+│   └── requirements.txt                 ← boto3, fastmcp deps
+│
+│── tests/
+│   ├── test_server.py                   ← MCP tool registration tests
+│   ├── test_contact_flows.py            ← Flow CRUD tests
+│   ├── test_outbound_harness.py         ← ⭐ Outbound call + attribute tests
+│   └── test_components.py               ← Component tool tests
+│
+│── docs/
+│   ├── ARCHITECTURE.md                  ← This doc
+│   ├── API_REFERENCE.md                 ← All tool descriptions
+│   ├── HERMES_SETUP.md                ← Hermes agent config
+│   └── LAMBDA_BRIDGE_SPEC.md            ← REST API docs
+│
+│── README.md                            ← 1-liner deploy + quick start
+│── QUICKSTART.md                        ← Copy-paste config snippets
+│── pyproject.toml                       ← Python packaging
+│── requirements.txt                     ← Dependencies
+│── LICENSE                              ← MIT
+│── .gitignore
+│
+└── scripts/
+    ├── validate.py                      ← Pre-flight checks (AWS, Python, deps)
+    └── setup.sh                         ← First-time developer env setup
+```
 
 ---
 
-## 11. Appendix
+## CloudFormation Stack Detail
 
-### A. Resource ARN Formats
+### Resources Created
 
-| Resource | ARN Format |
-|----------|-----------|
-| Instance | `arn:aws:connect:{region}:{account-id}:instance/{instance-id}` |
-| Contact Flow | `arn:aws:connect:{region}:{account-id}:instance/{instance-id}/contact-flow/{flow-id}` |
-| Queue | `arn:aws:connect:{region}:{account-id}:instance/{instance-id}/queue/{queue-id}` |
-| Phone Number | `arn:aws:connect:{region}:{account-id}:phone-number/{phone-number-id}` |
-| Prompt | `arn:aws:connect:{region}:{account-id}:instance/{instance-id}/prompt/{prompt-id}` |
+| # | Resource | Type | Notes |
+|---|----------|------|-------|
+| 1 | Connect Instance | `AWS::Connect::Instance` | Alias + Identity management type |
+| 2 | Default Queue | `AWS::Connect::Queue` | Named "MCP Default Queue" |
+| 3 | Hours of Operation | `AWS::Connect::HoursOfOperation` | Mon-Fri 9AM-5PM ET |
+| 4 | Outbound Contact Flow | `AWS::Connect::ContactFlow` | Uses universal template JSON |
+| 5 | Lambda Function | `AWS::Lambda::Function` | Python 3.12, inline code |
+| 6 | IAM Role | `AWS::IAM::Role` | Least-privilege, Connect + Lambda + CloudWatch |
+| 7 | API Gateway | `AWS::ApiGateway::RestApi` | `{proxy+}` route + OPTIONS |
+| 8 | Lambda Permission | `AWS::Lambda::Permission` | API Gateway → Lambda invoke |
+| 9 | CloudWatch Log Group | `AWS::Logs::LogGroup` | 14-day retention |
+| 10 | Phone Number | Lambda-custom | Auto-claimed during deploy |
 
-### B. Service Quotas (Reference)
+### Stack Outputs
 
-| Resource | Default Limit |
-|----------|--------------|
-| Contacts per second | 100 |
-| Queues per instance | 50 |
-| Contact flows per instance | 200 |
-| Phone numbers per instance | 100 |
-| Prompts per instance | 250 |
-| Concurrent calls | Varies by instance |
+| Output | Value |
+|--------|-------|
+| `ConnectInstanceId` | Instance UUID |
+| `ConnectInstanceArn` | Instance ARN |
+| `ApiGatewayUrl` | `https://xxx.execute-api.region.amazonaws.com/prod` |
+| `LambdaFunctionArn` | Lambda ARN |
+| `McpServerConfig` | Ready-to-paste JSON for MCP clients |
+| `PhoneNumberClaimed` | The claimed number |
+| `ContactFlowId` | Outbound flow ID |
+
+---
+
+## Tool Inventory
+
+### Outbound Communication (4 tools)
+| Tool | API | Key Feature |
+|------|-----|-------------|
+| `connect_start_outbound_voice_contact` | `connect:StartOutboundVoiceContact` | ⭐ Supports `Attributes={}` dict for dynamic messages |
+| `connect_stop_contact` | `connect:StopContact` | End active call |
+| `connect_describe_contact` | `connect:DescribeContact` | Get call details |
+| `connect_update_contact_attributes` | `connect:UpdateContactAttributes` | Change attrs mid-call |
+
+### Instance Management (5 tools)
+| Tool | API | Key Feature |
+|------|-----|-------------|
+| `connect_instances_list` | `connect:ListInstances` | All regions |
+| `connect_instances_describe` | `connect:DescribeInstance` | Detail view |
+| `connect_instances_create` | `connect:CreateInstance` | One-time setup |
+| `connect_instances_update` | `connect:UpdateInstanceAttribute` | Modify settings |
+| `connect_instances_delete` | `connect:DeleteInstance` | ⚠️ Teardown |
+
+### Phone Numbers (6 tools)
+| Tool | API | Key Feature |
+|------|-----|-------------|
+| `connect_phone_numbers_search` | `connect:SearchAvailablePhoneNumbers` | Find toll-free / DID |
+| `connect_phone_numbers_claim` | `connect:ClaimPhoneNumber` | Assign number |
+| `connect_phone_numbers_release` | `connect:ReleasePhoneNumber` | ⚠️ Remove number |
+| `connect_phone_numbers_list` | `connect:ListPhoneNumbers` | Show claimed |
+| `connect_phone_numbers_describe` | `connect:DescribePhoneNumber` | Details |
+| `connect_phone_numbers_update` | `connect:UpdatePhoneNumber` | Modify |
+
+### Queues (6 tools)
+| Tool | API |
+|------|-----|
+| `connect_queues_list` | `connect:ListQueues` |
+| `connect_queues_describe` | `connect:DescribeQueue` |
+| `connect_queues_create` | `connect:CreateQueue` |
+| `connect_queues_update` | `connect:UpdateQueue` |
+| `connect_queues_delete` | `connect:DeleteQueue` |
+| `connect_queues_update_name` | `connect:UpdateQueueName` |
+
+### Hours of Operation (8 tools)
+| Tool | API |
+|------|-----|
+| `connect_hours_of_operations_list` | `connect:ListHoursOfOperations` |
+| `connect_hours_of_operations_describe` | `connect:DescribeHoursOfOperation` |
+| `connect_hours_of_operations_create` | `connect:CreateHoursOfOperation` |
+| `connect_hours_of_operations_update` | `connect:UpdateHoursOfOperation` |
+| `connect_hours_of_operations_delete` | `connect:DeleteHoursOfOperation` |
+| `connect_hours_of_operations_create_override` | `connect:CreateHoursOfOperationOverride` |
+| `connect_hours_of_operations_delete_override` | `connect:DeleteHoursOfOperationOverride` |
+| `connect_hours_of_operations_describe_override` | `connect:DescribeHoursOfOperationOverride` |
+
+### Prompts (4 tools)
+| Tool | API |
+|------|-----|
+| `connect_prompts_list` | `connect:ListPrompts` |
+| `connect_prompts_describe` | `connect:DescribePrompt` |
+| `connect_prompts_create` | `connect:CreatePrompt` |
+| `connect_prompts_delete` | `connect:DeletePrompt` |
+
+### Contact Flows (12 tools via `contact_flow_tools.py`)
+| Tool | Key Feature |
+|------|-------------|
+| `contact_flows_create_outbound` | ⭐ Template-driven with parameters |
+| `contact_flows_create` | Raw JSON |
+| `contact_flows_update_from_template` | Re-render template |
+| `contact_flows_list` | List all |
+| `contact_flows_describe` | Detail view |
+| `contact_flows_delete` | Remove |
+| `contact_flows_update_content` | Patch JSON |
+| `contact_flows_search` | Filter/search |
+| `contact_flows_list_templates` | Available templates |
+| `contact_flows_get_template_schema` | Parameter schema |
+| `contact_flows_validate_parameters` | Pre-check |
+| `contact_flows_create_version` | Versioning |
+
+### Routing Profiles (2 tools)
+| Tool | API |
+|------|-----|
+| `connect_routing_profiles_list` | `connect:ListRoutingProfiles` |
+| `connect_routing_profiles_describe` | `connect:DescribeRoutingProfile` |
+
+### Users (2 tools)
+| Tool | API |
+|------|-----|
+| `connect_users_list` | `connect:ListUsers` |
+| `connect_users_describe` | `connect:DescribeUser` |
+
+**Total: 48+ tools**
+
+---
+
+## Cost Breakdown
+
+| Component | AWS Pricing | Est. Monthly (light usage) |
+|-----------|------------|---------------------------|
+| Connect Instance | Free | $0 |
+| Phone Number (Toll-Free US) | $0.10-$1.25 | ~$1 |
+| Phone Number (DID US) | $1.00-$3.00 | ~$2 |
+| Outbound Minutes | ~$0.018/min | $18 (1,000 min) |
+| Lambda Requests | $0.20/million | ~$0.20 |
+| API Gateway | $3.50/million | ~$3.50 |
+| CloudWatch Logs | $0.50/GB ingested | ~$0.50 |
+| CloudFormation | Free | $0 |
+| **Total** | | **~$25-30/mo** |
+
+---
+
+## Security Model
+
+### Identity
+- No long-term credentials stored in code
+- Uses standard AWS credential chain:
+  1. `~/.aws/credentials` profile
+  2. Environment variables (AWS_ACCESS_KEY_ID, etc.)
+  3. IAM role (if running on EC2/ECS/Lambda)
+
+### IAM Permissions (Least Privilege)
+- `connect:*` scoped to instance where possible
+- `lambda:InvokeFunction` only on own function
+- CloudWatch write only to own log group
+- No `iam:*`, `s3:*`, or cross-account access
+
+### Data Handling
+- No PII stored in MCP server
+- All API calls are real-time to AWS
+- Connect encrypts call recordings at rest (KMS)
+- Contact attributes only persist during call (or sent to Kinesis if configured)
+
+---
+
+## Extensibility
+
+### Add a New Contact Flow Template
+
+```bash
+# 1. Create JSON in templates/outbound/my_flow.json
+# 2. Use {{variable_name}} placeholders  
+# 3. Register in templates/registry.py
+# 4. Call via MCP:
+contact_flows_create_outbound(
+    instance_id="...",
+    name="My Flow",
+    mode="PLAY_PROMPT",
+    parameters={"variable_name": "Hello!"}
+)
+```
+
+### Add a New Lambda Bridge API
+
+Add to `lambda/connect_api_handler.py`:
+```python
+elif action == 'my_new_action':
+    result = connect.my_new_api(**params)
+    return response(200, result)
+```
+Then register as MCP tool in `src/amazon_connect_mcp/connect_api_bridge.py`.
+
+### Add a New Direct boto3 Tool
+
+Add to existing component or create `components/new_service.py`, then register in `server.py`:
+```python
+from .components.new_service import connect_new_tool
+mcp.tool()(connect_new_tool)
+```
+
+---
+
+## Design Decisions
+
+| Decision | Why |
+|----------|-----|
+| **CloudFormation over Terraform** | Native AWS, no extra dependencies, one AWS CLI command |
+| **Lambda inline code** | No S3 bucket needed for deployment |
+| **Single `{proxy+}` API Gateway route** | Simpler than 15+ individual methods, zero ordering issues |
+| **Template engine with `{{variable}}` substitution** | Human-readable, no Jinja2 dependency, works with raw JSON |
+| **boto3 direct instead of all via Lambda** | Faster, fewer Lambda cold starts, simpler debugging |
+| **Contact flow JSON stored as files** | Version controlled, diffable, reviewable |
+| **FastMCP stdio default** | Works with Claude, Cursor, Hermes, VS Code — no network config |
+| **No stored credentials** | AWS credential chain handles rotation, profiles, SSO |
+| **MIT license** | Matches community upstream (`mundurragacl/amazon-connect-mcp`) |
+
+---
+
+## Roadmap
+
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1 | Core infrastructure + one-liner deploy | ✅ Done |
+| 2 | Outbound voice with attributes | ✅ Done |
+| 3 | Template engine + universal flows | ✅ Done |
+| 4 | Bedrock Agent / Lex integration | ✅ Done |
+| 5 | EventBridge webhooks (real-time call events) | 📋 Planned |
+| 6 | Amazon Q Connect integration (AI agent) | 📋 Planned |
+| 7 | Contact Lens analytics + transcripts | 📋 Planned |
+| 8 | Multi-region Connect instance replication | 📋 Future |
+
+---
+
+## Reference
+
+- **GitHub**: https://github.com/timmy-t-bot/amazon-connect-mcp
+- **MCP Spec**: https://modelcontextprotocol.io
+- **Amazon Connect API**: https://docs.aws.amazon.com/connect/latest/APIReference/
+- **Inspiration**: https://github.com/mundurragacl/amazon-connect-mcp (operations-focused)
+- **Deploy**: `./deploy.sh --help`
