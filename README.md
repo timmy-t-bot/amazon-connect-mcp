@@ -30,14 +30,90 @@ An MCP server with **48+ tools** for AI agents to manage Amazon Connect:
 ## Architecture
 
 ```
-AI Agent (Hermes/Claude/Cursor)
-    ↓ MCP (stdio/SSE)
-Amazon Connect MCP Server
-    ↓ boto3 / API Gateway
-Amazon Connect
-    ↓ Calls
-Customer Phone
+┌────────────────────────────────────────────────────────────┐
+│                   AI AGENT (Hermes/Claude)                  │
+│         calls MCP tool: connect_start_outbound_voice_contact │
+│              with attributes={"message": "Your appointment..."} │
+└──────────────────────────────┬─────────────────────────────┘
+                               │ MCP stdio
+┌──────────────────────────────▼─────────────────────────────┐
+│            AMAZON CONNECT MCP SERVER (Python + FastMCP)    │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │ 48+ Tools    │  │ Templates    │  │ API Bridge   │     │
+│  │ (direct)     │  │ (JSON + {{}})│  │ (Lambda)     │     │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     │
+│         │                 │                 │               │
+│         └─────────────────┴─────────────────┘               │
+│                         │ boto3                               │
+└─────────────────────────┼───────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│              AWS CLOUDFORMATION SINGLE STACK                 │
+│                                                             │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
+│   │ Connect  │  │ Phone  │  │ Default  │  │ Contact  │ │
+│   │ Instance │  │ Number │  │ Queue    │  │ Flow     │ │
+│   └────┬─────┘  └────┬────┘  └────┬─────┘  └────┬─────┘ │
+│        │             │           │             │         │
+│   ┌────┴─────────────┴───────────┴─────────────┴─────┐ │
+│   │              Lambda + API Gateway                    │ │
+│   └──────────────────────────────────────────────────────┘ │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │
+│   │ IAM Role    │  │ CloudWatch  │  │ Stack Outputs   │  │
+│   │ (minimal)   │  │ (14 days)   │  │ (API URL, IDs)  │  │
+│   └─────────────┘  └─────────────┘  └─────────────────┘  │
+└────────────────────────────────────────────────────────────┘
+                          │
+                     📞 Outbound call
+                          │
+┌─────────────────────────▼───────────────────────────────────┐
+│                    CUSTOMER PHONE                            │
+│  • Hears TTS message from $.Attributes.message               │
+│  • Presses 1 (confirm) or 2 (decline) if interactive          │
+│  • Call ends, disposition stored in Connect                 │
+└────────────────────────────────────────────────────────────┘
 ```
+
+### Data Flow
+
+**1. Deploy** (one command):
+```
+./deploy.sh → CloudFormation creates everything → Auto-claims phone number → Outputs ready MCP config
+```
+
+**2. Place Outbound Call** (AI agent):
+```
+AI Agent calls MCP tool → boto3 → connect:StartOutboundVoiceContact → AWS dials customer → Contact flow runs → TTS plays message
+```
+
+**3. Manage Infrastructure** (AI agent):
+```
+AI Agent queries → list_instances, list_queues, list_phone_numbers, search_available_numbers, claim_phone_number, create_contact_flow
+```
+
+### Tool Count: 48+
+
+| Category | Count | Key Tool |
+|----------|-------|----------|
+| **Outbound** | 4 | `connect_start_outbound_voice_contact` (with Attributes dict) |
+| **Instances** | 5 | create, describe, list, update, delete |
+| **Phone Numbers** | 6 | search, claim, release, list, describe, update |
+| **Queues** | 6 | CRUD + update name |
+| **Hours of Operation** | 8 | CRUD + overrides |
+| **Prompts** | 4 | CRUD |
+| **Contact Flows** | 12 | template-driven create/update + raw JSON |
+| **Routing Profiles** | 2 | list, describe |
+| **Users** | 2 | list, describe |
+
+### Cost (Light Usage)
+
+| Component | Monthly |
+|-----------|---------|
+| Connect instance | Free |
+| Phone number | ~$2 |
+| Outbound minutes | ~$0.018/min |
+| Lambda + API GW | ~$4 |
+| **Total** | **~$25/mo** |
 
 ## Prerequisites
 
